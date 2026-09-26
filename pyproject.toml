@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roomsense"
+version = "0.1.0"
+description = "Webcam-based room tracking and gesture recognition"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "mediapipe>=0.10.21,<1.0",
+    "numpy>=1.26,<2.0",
+    "opencv-contrib-python>=4.10,<5.0",
+    "pyobjc-framework-AVFoundation>=10; sys_platform == 'darwin'",
+]
+
+[project.scripts]
+roomsense = "roomsense.main:run"
+
+[tool.setuptools.packages.find]
+include = ["roomsense*"]
