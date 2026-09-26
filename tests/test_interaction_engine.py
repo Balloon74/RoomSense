@@ -76,6 +76,24 @@ class InteractionEngineTests(unittest.TestCase):
         self.assertIsNone(lost.target.confirmed)
         self.assertEqual(lost.pointing, ())
 
+    def test_debug_state_explains_why_pointing_or_target_is_unavailable(self):
+        no_person = self.engine.update(observation(0.0, landmarks=None))
+        self.assertEqual(no_person.debug_state["pointing_status"], "NO PERSON DETECTED")
+
+        missing_arm = self.engine.update(observation(0.1, landmarks={"nose": Landmark(0.5, 0.2)}))
+        self.assertEqual(missing_arm.debug_state["pointing_status"], "ARM LANDMARKS MISSING")
+
+        low_visibility = pose()
+        low_visibility["left_wrist"] = Landmark(0.6, 0.5, visibility=0.2)
+        low = self.engine.update(observation(0.2, landmarks=low_visibility))
+        self.assertEqual(low.debug_state["pointing_status"], "LOW ARM VISIBILITY")
+
+        bent = pose()
+        bent["left_elbow"] = Landmark(0.4, 0.5)
+        bent["left_wrist"] = Landmark(0.3, 0.4)
+        bent_result = self.engine.update(observation(0.3, landmarks=bent))
+        self.assertEqual(bent_result.debug_state["pointing_status"], "ARM NOT EXTENDED")
+
     def test_command_mode_transitions_and_timeout_are_reported(self):
         config = RoomSenseConfig(
             pointing_min_visibility=0.5,

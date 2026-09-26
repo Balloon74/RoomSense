@@ -81,6 +81,7 @@ class RoomSenseConfig:
     event_feed_size: int = 8
     session_recording_path: str = "roomsense-session.jsonl"
     record_position_interval_seconds: float = 0.5
+    evaluation_recording_path: str = "roomsense-evaluation.jsonl"
 
     def __post_init__(self) -> None:
         for name in ("pointing_min_visibility", "pointing_min_extension"):
@@ -108,6 +109,8 @@ class RoomSenseConfig:
             raise ValueError("event_feed_size must be a positive integer")
         if not isinstance(self.session_recording_path, str) or not self.session_recording_path.strip():
             raise ValueError("session_recording_path cannot be empty")
+        if not isinstance(self.evaluation_recording_path, str) or not self.evaluation_recording_path.strip():
+            raise ValueError("evaluation_recording_path cannot be empty")
         if not isinstance(self.room_objects, (tuple, list)) or any(
             not isinstance(item, RoomObjectConfig) for item in self.room_objects
         ):

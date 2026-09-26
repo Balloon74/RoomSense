@@ -85,6 +85,19 @@ class OverlayControlHintTests(unittest.TestCase):
         self.assertTrue(any("SMOOTH" in text and "0.8" in text for text in texts))
         self.assertTrue(any("RIGHT_HOLD_POINT" in text for text in texts))
 
+    def test_hud_shows_evaluation_state_and_pointing_diagnostic(self):
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        import cv2
+        with patch("cv2.putText", wraps=cv2.putText) as draw_text:
+            TrackingOverlay().draw(
+                frame, None, None, "STILL", (), 0.0,
+                evaluation_active=True,
+                pointing_status="LOW ARM VISIBILITY",
+            )
+        texts = [call.args[1] for call in draw_text.call_args_list]
+        self.assertTrue(any("EVALUATION CAPTURE" in text for text in texts))
+        self.assertTrue(any("LOW ARM VISIBILITY" in text for text in texts))
+
 
 if __name__ == "__main__":
     unittest.main()

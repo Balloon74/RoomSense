@@ -11,6 +11,8 @@ from roomsense.config import RoomSenseConfig
 from roomsense.gestures.gesture_detector import GestureDetector
 from roomsense.interactions.engine import InteractionEngine, InteractionObservation
 from roomsense.recording.recording_control import RecordingController
+from roomsense.recording.evaluation_control import EvaluationCaptureController
+from roomsense.evaluation import EvaluationRecorder
 from roomsense.recording.session_recorder import SessionRecorder
 from roomsense.spatial.floor_position import FloorPosition, FloorPositionTracker
 from roomsense.spatial.observation_state import SpatialObservationMonitor
@@ -91,6 +93,7 @@ def run(config: RoomSenseConfig | None = None) -> int:
 
     tracker: PoseTracker | None = None
     recording_controller: RecordingController | None = None
+    evaluation_controller: EvaluationCaptureController | None = None
     try:
         tracker = PoseTracker(settings)
         position_tracker = PositionTracker(settings)
@@ -108,6 +111,9 @@ def run(config: RoomSenseConfig | None = None) -> int:
         interaction_engine = InteractionEngine(settings, settings.room_objects)
         recording_controller = RecordingController(
             lambda: SessionRecorder(settings.session_recording_path, settings.record_position_interval_seconds)
+        )
+        evaluation_controller = EvaluationCaptureController(
+            lambda: EvaluationRecorder(settings.evaluation_recording_path, settings)
         )
         calibration_view = CalibrationView()
         calibration_path = Path(settings.calibration_path).expanduser()
@@ -226,6 +232,7 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 zone_left=left_zones,
                 movement_state=movement_text,
             ))
+            evaluation_controller.record(now, landmarks)
             recording_state = {
                 "timestamp": now,
                 "room_position": room_position,
@@ -258,6 +265,8 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 recent_events=interaction.recent_events, demo_status=interaction.demo_status,
                 recorder_active=recording_controller.active, objects=interaction_engine.room_objects.objects,
                 debug_state=interaction.debug_state,
+                evaluation_active=evaluation_controller.active,
+                pointing_status=str(interaction.debug_state.get("pointing_status", "")),
             )
             cv2.imshow(window_name, display)
             key = cv2.waitKey(1) & 0xFF
@@ -280,6 +289,13 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 except OSError as exc:
                     zone_transition = "SESSION RECORDING FAILED"
                     print(f"Could not start session recording: {exc}", file=sys.stderr)
+            elif key in (ord("e"), ord("E")):
+                try:
+                    active = evaluation_controller.toggle()
+                    zone_transition = "EVALUATION CAPTURE STARTED" if active else "EVALUATION CAPTURE SAVED"
+                except OSError as exc:
+                    zone_transition = "EVALUATION CAPTURE FAILED"
+                    print(f"Could not start evaluation capture: {exc}", file=sys.stderr)
             elif key in (ord("c"), ord("C")):
                 new_calibration, quit_requested = calibration_view.run(camera_frame, window_name)
                 if quit_requested:
@@ -307,6 +323,11 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 recording_controller.close()
             except OSError as exc:
                 print(f"Could not fully flush session recording: {exc}", file=sys.stderr)
+        if evaluation_controller is not None:
+            try:
+                evaluation_controller.close()
+            except OSError as exc:
+                print(f"Could not fully flush evaluation capture: {exc}", file=sys.stderr)
         try:
             if tracker is not None:
                 tracker.close()

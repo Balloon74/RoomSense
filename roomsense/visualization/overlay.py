@@ -32,7 +32,8 @@ class TrackingOverlay:
              target: TargetUpdate | None = None, mode: InteractionMode | str = InteractionMode.NORMAL,
              recent_events: Sequence[RoomSenseEvent] = (), demo_status: str | None = None,
              recorder_active: bool = False, objects: Sequence[RoomObject] = (),
-             debug_state: Mapping[str, object] | None = None) -> Any:
+             debug_state: Mapping[str, object] | None = None, evaluation_active: bool = False,
+             pointing_status: str = "") -> Any:
         import cv2
 
         height, width = frame.shape[:2]
@@ -90,10 +91,13 @@ class TrackingOverlay:
         movement_text = f"MOVEMENT: {movement}"
         pose_text = "POSE: " + (" / ".join(states) if states else "UNKNOWN")
         self._bottom_status(frame, movement_text, pose_text)
-        self._draw_interaction_panel(frame, pointing, target, recent_events, demo_status, recorder_active)
+        self._draw_interaction_panel(
+            frame, pointing, target, recent_events, demo_status, recorder_active,
+            evaluation_active, pointing_status,
+        )
         if debug and debug_state is not None:
             self._draw_interaction_debug(frame, debug_state)
-        cv2.putText(frame, "C CALIBRATE   D DEBUG   R RESET   V RECORD   Q/ESC QUIT", (15, height - 82),
+        cv2.putText(frame, "C CALIBRATE   D DEBUG   R RESET   V RECORD   E EVAL   Q/ESC QUIT", (15, height - 82),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.34, (165, 190, 195), 1, cv2.LINE_AA)
         if width >= 500 and height >= 350:
             self.room_map.draw(
@@ -126,27 +130,32 @@ class TrackingOverlay:
     def _draw_interaction_panel(
         self, frame: Any, pointing: Sequence[ArmPointing], target: TargetUpdate | None,
         events: Sequence[RoomSenseEvent], demo_status: str | None, recorder_active: bool,
+        evaluation_active: bool, pointing_status: str,
     ) -> None:
         import cv2
 
         height, width = frame.shape[:2]
         left, top = 15, 190
         if height < 360:
-            top = max(18, height - 66)
+            top = max(18, height - 72)
             bottom = height - 18
             panel_width = min(270, max(150, width - 30))
             cv2.rectangle(frame, (left, top), (min(width - 1, left + panel_width), bottom), (13, 22, 30), -1)
             cv2.rectangle(frame, (left, top), (min(width - 1, left + panel_width), bottom), (58, 176, 194), 1)
             chosen = (target.confirmed or target.candidate) if target else None
             label = chosen.object.name if chosen else ",".join(arm.side.upper() for arm in pointing) or "--"
-            cv2.putText(frame, f"POINTING: {label}"[:32], (left + 9, top + 20),
+            cv2.putText(frame, f"POINTING: {label}"[:32], (left + 9, top + 17),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, (245, 225, 120), 1, cv2.LINE_AA)
-            session = "REC" if recorder_active else "NOT REC"
-            cv2.putText(frame, f"SESSION: {session}  EVENTS: {len(events)}", (left + 9, top + 42),
+            status = pointing_status or ("TARGET CONFIRMED" if target and target.confirmed else "POINTING IDLE")
+            cv2.putText(frame, f"STATUS: {status}"[:35], (left + 9, top + 36),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.33, (190, 220, 225), 1, cv2.LINE_AA)
+            session = "ON" if recorder_active else "OFF"
+            evaluation = "ON" if evaluation_active else "OFF"
+            cv2.putText(frame, f"V REC: {session}  E EVAL: {evaluation}", (left + 9, top + 54),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.34, (145, 205, 190), 1, cv2.LINE_AA)
             return
         panel_width = min(430, max(150, width - 30))
-        bottom = min(height - 18, 360)
+        bottom = min(height - 18, 410)
         if bottom > top:
             cv2.rectangle(frame, (left, top), (left + panel_width, bottom), (13, 22, 30), -1)
             cv2.rectangle(frame, (left, top), (left + panel_width, bottom), (58, 176, 194), 1)
@@ -165,13 +174,18 @@ class TrackingOverlay:
                     0.48, (245, 225, 120), 1, cv2.LINE_AA)
         cv2.putText(frame, confidence, (left + 12, top + 47), cv2.FONT_HERSHEY_SIMPLEX,
                     0.42, (190, 220, 225), 1, cv2.LINE_AA)
+        status = pointing_status or ("TARGET CONFIRMED" if confirmed else "POINTING IDLE")
+        cv2.putText(frame, f"STATUS: {status}"[:52], (left + 12, top + 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (175, 220, 220), 1, cv2.LINE_AA)
         if demo_status:
-            cv2.putText(frame, f"ACTION: {demo_status}"[:48], (left + 12, top + 70),
+            cv2.putText(frame, f"ACTION: {demo_status}"[:48], (left + 12, top + 91),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.40, (90, 235, 155), 1, cv2.LINE_AA)
-        status_y = top + 91 if demo_status else top + 70
-        cv2.putText(frame, "SESSION: RECORDING" if recorder_active else "SESSION: NOT RECORDING",
+        status_y = top + 112 if demo_status else top + 91
+        capture_status = ("V SESSION: RECORDING" if recorder_active else "V SESSION: OFF") \
+            + ("   EVALUATION CAPTURE: ON" if evaluation_active else "   EVALUATION CAPTURE: OFF")
+        cv2.putText(frame, capture_status,
                     (left + 12, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
-                    (80, 220, 160) if recorder_active else (145, 165, 170), 1, cv2.LINE_AA)
+                    (80, 220, 160) if evaluation_active else (145, 165, 170), 1, cv2.LINE_AA)
         feed_y = status_y + 22
         cv2.putText(frame, "RECENT EVENTS", (left + 12, feed_y), cv2.FONT_HERSHEY_SIMPLEX,
                     0.34, (115, 205, 215), 1, cv2.LINE_AA)

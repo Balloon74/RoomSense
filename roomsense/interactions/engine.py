@@ -151,6 +151,10 @@ class InteractionEngine:
             "active_gestures": self.gesture_detector.active_gestures,
             "cooldowns": self.gesture_detector.cooldowns,
             "mode": self.mode_controller.mode.value,
+            "pointing_status": _pointing_status(
+                landmarks, pointing, target, self.room_objects.enabled_objects(),
+                self.config.pointing_min_visibility, self.config.pointing_min_extension,
+            ),
         }
         return InteractionUpdate(
             pointing=pointing,
@@ -192,3 +196,53 @@ def _raw_arm_vectors(landmarks: Mapping[str, Landmark] | None) -> Mapping[str, t
                 (wrist.x - elbow.x, wrist.y - elbow.y),
             )
     return vectors
+
+
+def _pointing_status(
+    landmarks: Mapping[str, Landmark] | None,
+    pointing: tuple[ArmPointing, ...],
+    target: TargetUpdate,
+    enabled_objects: tuple[RoomObject, ...],
+    min_visibility: float,
+    min_extension: float,
+) -> str:
+    if not landmarks:
+        return "NO PERSON DETECTED"
+    if not pointing:
+        saw_landmark = False
+        saw_low_visibility = False
+        saw_full_arm = False
+        for side in ("left", "right"):
+            parts = tuple(landmarks.get(f"{side}_{name}") for name in ("shoulder", "elbow", "wrist"))
+            if not any(part is not None for part in parts):
+                continue
+            saw_landmark = True
+            if any(part is None for part in parts):
+                continue
+            saw_full_arm = True
+            if any(not math.isfinite(part.visibility) or part.visibility < min_visibility for part in parts):
+                saw_low_visibility = True
+                continue
+            shoulder, elbow, wrist = parts
+            length = math.dist((shoulder.x, shoulder.y), (wrist.x, wrist.y))
+            total = math.dist((shoulder.x, shoulder.y), (elbow.x, elbow.y)) \
+                + math.dist((elbow.x, elbow.y), (wrist.x, wrist.y))
+            if not all(math.isfinite(value) for value in (
+                shoulder.x, shoulder.y, elbow.x, elbow.y, wrist.x, wrist.y, length, total,
+            )):
+                continue
+            if total > 1e-9 and length / total >= min_extension:
+                return "ARM GEOMETRY UNAVAILABLE"
+        if saw_low_visibility:
+            return "LOW ARM VISIBILITY"
+        if saw_full_arm:
+            return "ARM NOT EXTENDED"
+        return "ARM LANDMARKS MISSING" if saw_landmark or landmarks else "ARM LANDMARKS MISSING"
+    if target.confirmed and target.candidate \
+            and target.confirmed.object.id == target.candidate.object.id:
+        return "TARGET CONFIRMED"
+    if target.candidate:
+        return "HOLD AIM ON TARGET"
+    if not enabled_objects:
+        return "NO ENABLED TARGETS"
+    return "AIM AT A CONFIGURED TARGET"
