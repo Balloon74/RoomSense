@@ -78,7 +78,8 @@ class MacActionTests(unittest.TestCase):
 
     def test_macos_controller_reports_subprocess_failure(self):
         failure = subprocess.CalledProcessError(1, ["osascript"], stderr="denied")
-        with patch("roomsense.actions.macos_controller.subprocess.run", side_effect=failure):
+        with patch("roomsense.actions.action_registry.sys.platform", "darwin"), \
+                patch("roomsense.actions.macos_controller.subprocess.run", side_effect=failure):
             registry = ActionRegistry(mac_controls_enabled=True, controller=MacOSController())
             result = registry.dispatch(intent())
         self.assertFalse(result.succeeded)

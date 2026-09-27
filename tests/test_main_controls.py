@@ -125,6 +125,17 @@ class MainControlsTests(unittest.TestCase):
                         .mac_controls_enabled)
         self.assertFalse(_resolve_mac_controls_config(configured, ["--dry-run"]).mac_controls_enabled)
 
+    def test_python_config_call_ignores_unrelated_host_process_arguments(self):
+        configured = RoomSenseConfig(camera_index=3, mac_controls_enabled=True)
+        with patch("roomsense.main.sys.argv", ["host-app", "--host-option", "value"]):
+            resolved = _resolve_mac_controls_config(configured)
+        self.assertIs(resolved, configured)
+
+    def test_cli_exposes_standard_help(self):
+        with self.assertRaises(SystemExit) as raised:
+            _resolve_mac_controls_config(None, ["--help"])
+        self.assertEqual(raised.exception.code, 0)
+
     def _run_with_hand_setup(self, factory, injected_tracker=None):
         import numpy
 

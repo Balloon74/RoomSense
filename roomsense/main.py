@@ -32,11 +32,16 @@ def _resolve_mac_controls_config(
     config: RoomSenseConfig | None, argv: list[str] | None = None
 ) -> RoomSenseConfig:
     settings = config or RoomSenseConfig()
-    parser = argparse.ArgumentParser(prog="roomsense", add_help=False)
+    parser = argparse.ArgumentParser(
+        prog="roomsense", description="Track a room and optionally enable gesture-based Mac controls."
+    )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--enable-mac-controls", action="store_true")
-    group.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    group.add_argument("--enable-mac-controls", action="store_true",
+                       help="explicitly enable real macOS media and volume controls")
+    group.add_argument("--dry-run", action="store_true",
+                       help="force simulated actions, even if config enables Mac controls")
+    arguments = argv if argv is not None else (sys.argv[1:] if config is None else [])
+    args = parser.parse_args(arguments)
     if args.enable_mac_controls:
         return replace(settings, mac_controls_enabled=True)
     if args.dry_run:
