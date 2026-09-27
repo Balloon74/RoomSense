@@ -17,11 +17,23 @@ DEFAULT_SHOULDER_WIDTH = 0.20
 MIN_WRIST_VISIBILITY = 0.35
 
 
-def classify_hand(observation: HandObservation) -> HandState | None:
+def classify_hand(
+    observation: HandObservation,
+    current_state: HandState | None = None,
+    *,
+    enter_margin: float = 0.02,
+    exit_margin: float = 0.03,
+) -> HandState | None:
     """Return the most specific supported state, or None for ambiguous geometry."""
+    if not math.isfinite(enter_margin) or enter_margin < 0.0 or enter_margin >= PINCH_DISTANCE_RATIO:
+        raise ValueError("enter_margin must be finite and in [0, PINCH_DISTANCE_RATIO)")
+    if not math.isfinite(exit_margin) or exit_margin < 0.0:
+        raise ValueError("exit_margin must be finite and non-negative")
     fingers = observation.finger_states
+    pinch_limit = PINCH_DISTANCE_RATIO + exit_margin if current_state is HandState.PINCHING \
+        else PINCH_DISTANCE_RATIO - enter_margin
     if observation.pinch_distance is not None \
-            and observation.pinch_distance <= PINCH_DISTANCE_RATIO \
+            and observation.pinch_distance <= pinch_limit \
             and fingers["thumb"] is not FingerState.UNCERTAIN \
             and fingers["index"] is not FingerState.UNCERTAIN \
             and (fingers["thumb"] is FingerState.EXTENDED or fingers["index"] is FingerState.EXTENDED):
@@ -83,6 +95,10 @@ class TemporalHandClassifier:
             state.pending_count = 0
         return state.current
 
+    def current(self, hand_key: str) -> HandState | None:
+        state = self._hands.get(hand_key)
+        return state.current if state is not None else None
+
     def reset(self, hand_key: str | None = None) -> None:
         if hand_key is None:
             self._hands.clear()
@@ -128,6 +144,7 @@ def associate_hands(
 
     assignments: tuple[str | None, ...] = tuple(None for _ in hands)
     best_score: tuple[int, float] | None = None
+    best_assignments: list[tuple[str | None, ...]] = []
     options = [tuple([None, *choices.keys()]) for choices in ratios]
     for candidate in product(*options):
         matched = [side for side in candidate if side is not None]
@@ -142,9 +159,19 @@ def associate_hands(
             ratios[index][side] for index, side in enumerate(candidate) if side is not None
         )
         score = (-len(matched), distance_cost + mismatch_cost)
-        if best_score is None or score < best_score:
+        if best_score is None or score[0] < best_score[0] \
+                or (score[0] == best_score[0] and score[1] < best_score[1] - 1e-9):
             assignments = candidate
             best_score = score
+            best_assignments = [candidate]
+        elif score[0] == best_score[0] and math.isclose(score[1], best_score[1], abs_tol=1e-9):
+            best_assignments.append(candidate)
+
+    if best_assignments:
+        assignments = tuple(
+            next(iter(sides)) if len(sides := {candidate[index] for candidate in best_assignments}) == 1 else None
+            for index in range(len(hands))
+        )
 
     associated = []
     for hand, side, choices in zip(hands, assignments, ratios):

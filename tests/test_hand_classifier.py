@@ -63,6 +63,39 @@ class HandGestureClassificationTests(unittest.TestCase):
         self.assertIs(uncertain.finger_states["index"], FingerState.EXTENDED)
         self.assertEqual(classify_hand(uncertain), HandState.PINCHING)
 
+    def test_pinch_enter_and_exit_margins_are_configurable(self):
+        points = open_hand_points()
+        points[4] = HandPoint(0.42, 0.337, 0.0)
+        hand = analyze_hand(points, "Left", 0.9)
+        self.assertGreater(hand.pinch_distance, 0.16)
+        self.assertLess(hand.pinch_distance, 0.18)
+
+        self.assertIs(classify_hand(hand), HandState.OPEN_PALM)
+        self.assertIs(classify_hand(hand, HandState.PINCHING), HandState.PINCHING)
+        self.assertIs(classify_hand(hand, enter_margin=0.04), HandState.OPEN_PALM)
+        self.assertIs(classify_hand(hand, enter_margin=0.0), HandState.PINCHING)
+
+    def test_uncertain_thumb_does_not_form_pinch_and_exit_margin_boundary_is_inclusive(self):
+        points = open_hand_points()
+        points[1] = HandPoint(0.43, 0.31)
+        points[3] = HandPoint(0.44, 0.32)
+        points[4] = HandPoint(0.42, 0.30)
+        points[12] = HandPoint(0.5, 0.8)
+        points[16] = HandPoint(0.5, 0.8)
+        points[20] = points[18]
+        uncertain_thumb = analyze_hand(points, "Left", 0.9)
+
+        self.assertIs(uncertain_thumb.finger_states["thumb"], FingerState.UNCERTAIN)
+        self.assertLess(uncertain_thumb.pinch_distance, 0.18)
+        self.assertIsNone(classify_hand(uncertain_thumb))
+
+        boundary = observation(("thumb", "index", "middle", "ring", "pinky"))
+        from dataclasses import replace
+        at_exit = replace(boundary, pinch_distance=0.21)
+        beyond_exit = replace(boundary, pinch_distance=0.21001)
+        self.assertIs(classify_hand(at_exit, HandState.PINCHING), HandState.PINCHING)
+        self.assertIs(classify_hand(beyond_exit, HandState.PINCHING), HandState.OPEN_PALM)
+
 
 class TemporalHandClassifierTests(unittest.TestCase):
     def test_new_state_requires_three_consecutive_observations(self):
@@ -125,6 +158,14 @@ class HandBodyAssociationTests(unittest.TestCase):
         associated = associate_hands((left,), body)
 
         self.assertEqual(associated[0].body_side, "left")
+
+    def test_unknown_handedness_remains_unassociated_when_wrist_scores_tie(self):
+        hand = observation(("index",), "Unknown")
+        body = body_landmarks(left_wrist=(0.5, 0.8), right_wrist=(0.5, 0.8))
+
+        associated = associate_hands((hand,), body)
+
+        self.assertIsNone(associated[0].body_side)
 
     def test_association_is_one_to_one_even_when_hands_share_one_nearby_wrist(self):
         first_points = open_hand_points()

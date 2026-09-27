@@ -85,6 +85,8 @@ class HandTrackerConfigTests(unittest.TestCase):
         self.assertEqual(config.hand_smoothing_alpha, 0.45)
         self.assertEqual(config.hand_max_wrist_distance_ratio, 0.75)
         self.assertEqual(config.hand_gesture_confirm_frames, 3)
+        self.assertEqual(config.hand_gesture_enter_margin, 0.02)
+        self.assertEqual(config.hand_gesture_exit_margin, 0.03)
 
     def test_hand_tracking_settings_reject_out_of_range_and_invalid_values(self):
         invalid = (
@@ -95,6 +97,8 @@ class HandTrackerConfigTests(unittest.TestCase):
             {"hand_max_wrist_distance_ratio": 0.0},
             {"hand_gesture_confirm_frames": 0},
             {"hand_gesture_confirm_frames": True},
+            {"hand_gesture_enter_margin": 0.18},
+            {"hand_gesture_exit_margin": -0.1},
         )
         for values in invalid:
             with self.subTest(values=values), self.assertRaises(ValueError):
@@ -132,6 +136,28 @@ class HandTrackerVideoTests(unittest.TestCase):
         self.assertAlmostEqual(hands[0].tracking_confidence, 0.9)
         self.assertEqual(hands[0].fingertips["pinky"], hands[0].landmarks[20])
 
+    def test_duplicate_handedness_keeps_independent_tracks_and_confirmation(self):
+        left_points = open_hand_points()
+        left_points = [HandPoint(point.x - 0.12, point.y, point.z, point.visibility) for point in left_points]
+        right_points = open_hand_points()
+        right_points = [HandPoint(point.x + 0.12, point.y, point.z, point.visibility) for point in right_points]
+        tracker, _ = self.make_tracker(
+            result(("Left", left_points), ("Left", right_points)),
+            result(("Left", right_points), ("Left", left_points)),
+            result(("Left", left_points), ("Left", right_points)),
+        )
+
+        first = tracker.process(object(), 100)
+        second = tracker.process(object(), 101)
+        third = tracker.process(object(), 102)
+
+        self.assertTrue(all(hand.state is None for hand in first))
+        self.assertTrue(all(hand.state is None for hand in second))
+        self.assertTrue(all(hand.state.value == "OPEN PALM" for hand in third))
+        self.assertGreater(abs(first[0].landmarks[0].x - first[1].landmarks[0].x), 0.15)
+        self.assertLess(abs(second[0].landmarks[0].x - first[1].landmarks[0].x), 0.05)
+        self.assertLess(abs(second[1].landmarks[0].x - first[0].landmarks[0].x), 0.05)
+
     def test_task_is_configured_for_two_hands_video_and_confidence_thresholds(self):
         tracker, _ = self.make_tracker(result())
 
@@ -167,7 +193,7 @@ class HandTrackerVideoTests(unittest.TestCase):
     def test_close_and_reset_release_model_and_per_hand_state(self):
         tracker, _ = self.make_tracker(result(("Left", open_hand_points())))
         tracker.process(object(), 100)
-        self.assertIn("Left", tracker._smoothers)
+        self.assertIn(0, tracker._smoothers)
 
         tracker.reset_smoothing()
         self.assertEqual(tracker._smoothers, {})

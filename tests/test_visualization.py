@@ -50,6 +50,22 @@ class OverlayControlHintTests(unittest.TestCase):
         self.assertTrue(any("PALM" in text and "NORMAL" in text for text in texts))
         self.assertTrue(any("BODY RIGHT" in text for text in texts))
 
+    def test_hand_debug_panel_avoids_interaction_diagnostics_and_room_map_on_compact_frame(self):
+        frame = np.zeros((600, 900, 3), dtype=np.uint8)
+        hands = tuple(analyze_hand(open_hand_points(), side, 0.9) for side in ("Left", "Right"))
+        import cv2
+        rectangle = cv2.rectangle
+        with patch("cv2.rectangle", wraps=rectangle) as draw_rectangle:
+            TrackingOverlay()._draw_hand_debug(frame, hands)
+
+        filled_panels = [call.args[1:4] for call in draw_rectangle.call_args_list if call.args[4] == -1]
+        self.assertEqual(len(filled_panels), 1)
+        (left, top), (right, bottom), _ = filled_panels[0]
+        self.assertGreaterEqual(left, 450)
+        self.assertGreater(top, 212)
+        self.assertLess(bottom, 492)
+        self.assertLessEqual(right, 885)
+
     def test_live_overlay_displays_calibration_debug_reset_and_quit_controls(self):
         frame = np.zeros((720, 1280, 3), dtype=np.uint8)
         display = TrackingOverlay().draw(frame, None, None, "STILL", (), 0.0)

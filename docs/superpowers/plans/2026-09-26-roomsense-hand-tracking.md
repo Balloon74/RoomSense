@@ -71,7 +71,7 @@
 
 **Interfaces:**
 - Consumes `HandObservation`, `HandState`, and `FingerState` from Task 1, and body `Landmark` from `pose_tracker.py`.
-- Produces `classify_hand(observation: HandObservation) -> HandState | None`, `TemporalHandClassifier.update(hand_key: str, candidate: HandState | None) -> HandState | None`, and `associate_hands(hands: Sequence[HandObservation], body_landmarks: Mapping[str, Landmark], max_distance_ratio: float = 0.75) -> tuple[HandObservation, ...]`.
+- Produces `classify_hand(observation: HandObservation, current_state: HandState | None = None, *, enter_margin: float = 0.02, exit_margin: float = 0.03) -> HandState | None`, `TemporalHandClassifier.update(hand_key: str, candidate: HandState | None) -> HandState | None`, and `associate_hands(hands: Sequence[HandObservation], body_landmarks: Mapping[str, Landmark], max_distance_ratio: float = 0.75) -> tuple[HandObservation, ...]`.
 - Uses three consecutive candidate observations before a new state is adopted; ambiguous or unsupported combinations remain unclassified. Association is one-to-one, requires visible pose wrists, uses handedness plus wrist distance normalized by shoulder width, and leaves unmatched hands valid and unassociated.
 
 - [ ] **Step 1: Write failing tests** for OPEN PALM, CLOSED FIST, POINTING, PEACE SIGN, THUMBS UP, PINCHING; ambiguous finger states; three-frame state confirmation; nearest valid wrist matching; one-to-one assignment; missing pose; and distant/ambiguous wrists.
@@ -91,7 +91,7 @@
 - Produces `HandTracker(config: RoomSenseConfig)`, `process(rgb_frame: Any, timestamp_ms: int, body_landmarks: Mapping[str, Landmark] | None = None) -> tuple[HandObservation, ...]`, `close()`, and `reset_smoothing()`.
 - Uses `mp.tasks.vision.HandLandmarkerOptions` with `RunningMode.VIDEO`, `num_hands=2`, and configured detection, presence, and tracking thresholds. Converts normalized model points into `HandPoint`, computes an estimated confidence from handedness score and point validity, smooths each anatomical hand, applies temporal classification, then associates to body wrists.
 - Cache `hand_landmarker.task` beside the pose model under `~/.cache/roomsense/`; download only on first use. Preserve monotonic timestamps and return an empty tuple when no hand is visible. No new dependency is required.
-- Add validated settings for hand detection/presence/tracking confidence, hand landmark smoothing, maximum wrist-association distance, and gesture confirmation frames with defaults `0.5`, `0.5`, `0.5`, `0.45`, `0.75` shoulder widths, and `3` frames.
+- Add validated settings for hand detection/presence/tracking confidence, hand landmark smoothing, maximum wrist-association distance, gesture confirmation frames, and normalized pinch enter/exit margins with defaults `0.5`, `0.5`, `0.5`, `0.45`, `0.75` shoulder widths, `3` frames, `0.02`, and `0.03` palm widths respectively.
 
 - [ ] **Step 1: Write failing tests** for default/invalid hand settings, empty model result, left/right result conversion with 21 landmarks, two-hand limit, monotonic timestamp handling, and close/reset behavior using fake MediaPipe result objects.
 - [ ] **Step 2: Run `python -m unittest discover -s tests -p 'test_hand_tracker.py' -v`** and confirm the tracker/settings APIs are absent.

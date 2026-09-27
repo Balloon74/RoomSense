@@ -65,6 +65,8 @@ class RoomSenseConfig:
     hand_smoothing_alpha: float = 0.45
     hand_max_wrist_distance_ratio: float = 0.75
     hand_gesture_confirm_frames: int = 3
+    hand_gesture_enter_margin: float = 0.02
+    hand_gesture_exit_margin: float = 0.03
     raised_hand_margin: float = 0.04
     sitting_leg_ratio: float = 0.18
     standing_leg_ratio: float = 0.42
@@ -113,6 +115,12 @@ class RoomSenseConfig:
                 or not isinstance(self.hand_gesture_confirm_frames, int) \
                 or self.hand_gesture_confirm_frames <= 0:
             raise ValueError("hand_gesture_confirm_frames must be a positive integer")
+        enter_margin = _finite(self.hand_gesture_enter_margin, "hand_gesture_enter_margin")
+        if not 0.0 <= enter_margin < 0.18:
+            raise ValueError("hand_gesture_enter_margin must be in [0, 0.18)")
+        exit_margin = _finite(self.hand_gesture_exit_margin, "hand_gesture_exit_margin")
+        if exit_margin < 0.0:
+            raise ValueError("hand_gesture_exit_margin must be non-negative")
         for name in ("target_stability_seconds", "target_hold_seconds", "gesture_cooldown_seconds"):
             if _finite(getattr(self, name), name) < 0.0:
                 raise ValueError(f"{name} must be non-negative")

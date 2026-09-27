@@ -89,6 +89,21 @@ class HandGeometryTests(unittest.TestCase):
                 self.assertIsNone(observation.palm_angle)
                 self.assertIsNone(observation.palm_normal)
 
+    def test_collapsed_or_nearly_collinear_palm_basis_is_uncertain(self):
+        for offset in (0.0, 1e-5):
+            points = open_hand_points()
+            points[5] = HandPoint(0.50, 0.58 + offset, 0.0)
+            points[17] = HandPoint(0.50, 0.58, 0.0)
+
+            observation = analyze_hand(points, "Left", 0.9)
+
+            self.assertTrue(all(state is FingerState.UNCERTAIN for state in observation.finger_states.values()))
+            self.assertEqual(observation.openness, 0.0)
+            self.assertIsNone(observation.pinch_distance)
+            self.assertIsNone(observation.palm_center)
+            self.assertIsNone(observation.palm_angle)
+            self.assertIsNone(observation.palm_normal)
+
     def test_landmark_count_must_match_the_media_pipe_hand_topology(self):
         with self.assertRaisesRegex(ValueError, "21"):
             analyze_hand(open_hand_points()[:-1], "Left", 0.9)

@@ -98,17 +98,27 @@ def analyze_hand(
     palm_size = _distance(wrist, middle_mcp) if not invalid else 0.0
     valid_palm = not invalid and math.isfinite(palm_size) and palm_size > 1e-6
 
-    if not valid_palm:
+    index_mcp = landmarks[5]
+    pinky_mcp = landmarks[17]
+    index_vector = _vector(wrist, index_mcp)
+    pinky_vector = _vector(wrist, pinky_mcp)
+    index_length = _magnitude(index_vector)
+    pinky_length = _magnitude(pinky_vector)
+    basis_area = _magnitude(_cross(index_vector, pinky_vector))
+    valid_basis = (
+        valid_palm
+        and index_length > palm_size * 0.08
+        and pinky_length > palm_size * 0.08
+        and basis_area > index_length * pinky_length * 0.05
+    )
+
+    if not valid_basis:
         finger_states = {name: FingerState.UNCERTAIN for name in FINGER_NAMES}
         return HandObservation(
             landmarks, handedness, _confidence(tracking_confidence), None, None, None,
             fingertips, finger_states, None, 0.0,
         )
 
-    index_mcp = landmarks[5]
-    pinky_mcp = landmarks[17]
-    index_vector = _vector(wrist, index_mcp)
-    pinky_vector = _vector(wrist, pinky_mcp)
     palm_normal = _unit(_cross(index_vector, pinky_vector))
     palm_angle = math.atan2(middle_mcp.y - wrist.y, middle_mcp.x - wrist.x)
 
@@ -186,8 +196,12 @@ def _cross(first: Point3, second: Point3) -> Point3:
     )
 
 
+def _magnitude(vector: Point3) -> float:
+    return math.sqrt(sum(component * component for component in vector))
+
+
 def _unit(vector: Point3) -> Point3 | None:
-    length = math.sqrt(sum(component * component for component in vector))
+    length = _magnitude(vector)
     if not math.isfinite(length) or length <= 1e-8:
         return None
     return tuple(component / length for component in vector)  # type: ignore[return-value]
