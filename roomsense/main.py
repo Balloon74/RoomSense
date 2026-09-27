@@ -21,6 +21,7 @@ from roomsense.spatial.room_transform import RoomTransform
 from roomsense.spatial.zones import Zone, ZoneTracker
 from roomsense.tracking.person_state import MovementTracker
 from roomsense.tracking.position_tracker import PositionTracker
+from roomsense.tracking.hand_tracker import HandTracker
 from roomsense.tracking.pose_tracker import PoseTracker
 from roomsense.visualization.calibration_view import CalibrationView
 from roomsense.visualization.overlay import TrackingOverlay
@@ -92,10 +93,12 @@ def run(config: RoomSenseConfig | None = None) -> int:
     camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     tracker: PoseTracker | None = None
+    hand_tracker: HandTracker | None = None
     recording_controller: RecordingController | None = None
     evaluation_controller: EvaluationCaptureController | None = None
     try:
         tracker = PoseTracker(settings)
+        hand_tracker = HandTracker(settings)
         position_tracker = PositionTracker(settings)
         movement_tracker = MovementTracker(
             settings.movement_window_seconds,
@@ -163,7 +166,9 @@ def run(config: RoomSenseConfig | None = None) -> int:
 
             frame = camera_frame.copy()
             rgb = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            landmarks = tracker.process(rgb, monotonic_ns() // 1_000_000)
+            timestamp_ms = monotonic_ns() // 1_000_000
+            landmarks = tracker.process(rgb, timestamp_ms)
+            hands = hand_tracker.process(rgb, timestamp_ms, landmarks)
 
             if landmarks:
                 lost_since = None
@@ -267,6 +272,7 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 debug_state=interaction.debug_state,
                 evaluation_active=evaluation_controller.active,
                 pointing_status=str(interaction.debug_state.get("pointing_status", "")),
+                hands=hands,
             )
             cv2.imshow(window_name, display)
             key = cv2.waitKey(1) & 0xFF
@@ -333,9 +339,13 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 tracker.close()
         finally:
             try:
-                camera.release()
+                if hand_tracker is not None:
+                    hand_tracker.close()
             finally:
-                cv2.destroyAllWindows()
+                try:
+                    camera.release()
+                finally:
+                    cv2.destroyAllWindows()
     return 0
 
 

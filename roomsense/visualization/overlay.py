@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping, Sequence
 
 from roomsense.calibration.camera_calibration import Calibration
@@ -13,6 +14,7 @@ from roomsense.spatial.position_history import PositionSample
 from roomsense.spatial.room_objects import RoomObject
 from roomsense.spatial.target_selection import TargetUpdate
 from roomsense.spatial.zones import Zone
+from roomsense.tracking.hand_geometry import HAND_CONNECTIONS, HandObservation
 from roomsense.tracking.position_tracker import Position
 from roomsense.tracking.pose_tracker import Landmark, SKELETON_CONNECTIONS
 from roomsense.visualization.room_map import RoomMap
@@ -33,7 +35,7 @@ class TrackingOverlay:
              recent_events: Sequence[RoomSenseEvent] = (), demo_status: str | None = None,
              recorder_active: bool = False, objects: Sequence[RoomObject] = (),
              debug_state: Mapping[str, object] | None = None, evaluation_active: bool = False,
-             pointing_status: str = "") -> Any:
+             pointing_status: str = "", hands: Sequence[HandObservation] = ()) -> Any:
         import cv2
 
         height, width = frame.shape[:2]
@@ -44,6 +46,7 @@ class TrackingOverlay:
             x0, y0 = max(0, min(xs) - 18), max(0, min(ys) - 24)
             x1, y1 = min(width - 1, max(xs) + 18), min(height - 1, max(ys) + 18)
             self._corner_box(frame, x0, y0, x1, y1)
+        self._draw_hands(frame, landmarks, hands)
         self._draw_pointing(frame, pointing)
 
         panel_h = min(162 if calibration is None else 184, max(40, height - 12))
@@ -113,7 +116,86 @@ class TrackingOverlay:
         else:
             cv2.putText(frame, "MAP HIDDEN: ENLARGE WINDOW", (max(15, width - 170), height - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.30, (115, 180, 190), 1, cv2.LINE_AA)
+        if debug and hands:
+            self._draw_hand_debug(frame, hands)
         return frame
+
+    def _draw_hands(
+        self, frame: Any, body_landmarks: Mapping[str, Landmark] | None,
+        hands: Sequence[HandObservation],
+    ) -> None:
+        import cv2
+
+        height, width = frame.shape[:2]
+        for hand in hands:
+            side = hand.handedness.casefold()
+            color = (60, 225, 150) if side == "left" else (245, 175, 75)
+            points = hand.landmarks
+            for start, end in HAND_CONNECTIONS:
+                if _valid_point(points[start]) and _valid_point(points[end]):
+                    cv2.line(frame, _point_pixel(points[start], width, height),
+                             _point_pixel(points[end], width, height), color, 2, cv2.LINE_AA)
+            for index, point in enumerate(points):
+                if _valid_point(point):
+                    cv2.circle(frame, _point_pixel(point, width, height),
+                               4 if index in (0, 4, 8, 12, 16, 20) else 2, color, -1, cv2.LINE_AA)
+
+            if hand.body_side in ("left", "right") and body_landmarks is not None:
+                body_wrist = body_landmarks.get(f"{hand.body_side}_wrist")
+                if body_wrist is not None and _valid_point(points[0]) and _valid_point(body_wrist):
+                    cv2.line(frame, self._pixel_point(frame, body_wrist),
+                             _point_pixel(points[0], width, height), (235, 235, 80), 2, cv2.LINE_AA)
+
+            if _valid_point(points[0]):
+                wrist_x, wrist_y = _point_pixel(points[0], width, height)
+                label = f"{hand.handedness.upper()} {hand.state.value if hand.state else 'HAND'}"
+                cv2.putText(frame, label, (max(4, wrist_x + 8), max(16, wrist_y - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.40, color, 1, cv2.LINE_AA)
+
+    def _draw_hand_debug(self, frame: Any, hands: Sequence[HandObservation]) -> None:
+        import cv2
+
+        height, width = frame.shape[:2]
+        if width >= 1100:
+            left = 450
+            panel_width = min(520, width - left - 300)
+            top = 190
+        else:
+            left = 15
+            panel_width = width - 30
+            top = max(20, height - (52 + len(hands) * 69) - 80)
+        row_height = 18
+        panel_height = 32 + len(hands) * 4 * row_height
+        bottom = min(height - 84, top + panel_height)
+        if panel_width < 150 or bottom <= top + 24:
+            return
+        cv2.rectangle(frame, (left, top), (min(width - 1, left + panel_width), bottom), (13, 22, 30), -1)
+        cv2.rectangle(frame, (left, top), (min(width - 1, left + panel_width), bottom), (58, 176, 194), 1)
+        cv2.putText(frame, "HAND TRACKING DEBUG", (left + 9, top + 18), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.38, (113, 224, 234), 1, cv2.LINE_AA)
+        for hand_index, hand in enumerate(hands):
+            side = hand.handedness.upper()
+            state = hand.state.value if hand.state else "UNCERTAIN"
+            fingers = [
+                f"{name.upper()}:{hand.finger_states[name].value.upper()}"
+                for name in ("thumb", "index", "middle", "ring", "pinky")
+            ]
+            pinch = f"{hand.pinch_distance:.2f}" if hand.pinch_distance is not None else "--"
+            palm = f"{math.degrees(hand.palm_angle):+.0f}deg" if hand.palm_angle is not None else "--"
+            normal = ",".join(f"{value:+.2f}" for value in hand.palm_normal) \
+                if hand.palm_normal is not None else "--"
+            body = hand.body_side.upper() if hand.body_side else "UNASSOCIATED"
+            y = top + 37 + hand_index * 4 * row_height
+            cv2.putText(frame, f"{side} {state}  FINGERS {fingers[0]} {fingers[1]} {fingers[2]}", (left + 9, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.31, (225, 238, 240), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"{fingers[3]} {fingers[4]}", (left + 9, y + row_height),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.31, (225, 238, 240), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"PINCH {pinch}  CONF {hand.tracking_confidence:.2f}  OPEN {hand.openness:.2f}",
+                        (left + 9, y + 2 * row_height), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.31, (185, 215, 220), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"PALM ANGLE {palm} NORMAL {normal}  BODY {body} ({hand.association_confidence:.2f})",
+                        (left + 9, y + 3 * row_height), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.31, (185, 215, 220), 1, cv2.LINE_AA)
 
     def _draw_pointing(self, frame: Any, pointing: Sequence[ArmPointing]) -> None:
         import cv2
@@ -278,3 +360,14 @@ class TrackingOverlay:
                     (231, 238, 238), 1, cv2.LINE_AA)
         cv2.putText(frame, pose[:48], (29, height - 26), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                     (121, 216, 221), 1, cv2.LINE_AA)
+
+
+def _valid_point(point: Any) -> bool:
+    try:
+        return all(math.isfinite(float(value)) for value in (point.x, point.y, point.z))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _point_pixel(point: Any, width: int, height: int) -> tuple[int, int]:
+    return int(point.x * width), int(point.y * height)
