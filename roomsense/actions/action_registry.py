@@ -61,6 +61,7 @@ class ActionRegistry:
         mac_controls_enabled: bool = False,
         controller: ActionController | None = None,
         history_size: int = 8,
+        volume_step_percent: int = 5,
     ) -> None:
         if not isinstance(mac_controls_enabled, bool):
             raise ValueError("mac_controls_enabled must be a boolean")
@@ -75,7 +76,7 @@ class ActionRegistry:
             if self.controller is None:
                 from roomsense.actions.macos_controller import MacOSController
 
-                self.controller = MacOSController()
+                self.controller = MacOSController(volume_step_percent=volume_step_percent)
 
     @property
     def history(self) -> tuple[ActionResult, ...]:

@@ -129,7 +129,8 @@ class HandGestureController:
             if self._shape != HandShape.FIST:
                 self._set_shape(shape, timestamp)
                 self._fist_cancelled = False
-            self._shape_samples += 1
+            else:
+                self._shape_samples += 1
             cancelled = False
             if not self._fist_cancelled and self._duration(timestamp) >= self.config.gesture_fist_hold_seconds \
                     and self._shape_samples >= self.config.gesture_min_samples:

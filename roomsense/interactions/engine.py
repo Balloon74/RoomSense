@@ -81,6 +81,7 @@ class InteractionEngine:
         self.action_registry = action_registry or create_demo_action_registry()
         self.mac_action_registry = mac_action_registry or MacActionRegistry(
             config.mac_controls_enabled, history_size=config.event_feed_size,
+            volume_step_percent=config.gesture_volume_step_percent,
         )
         self._was_moving = False
         self._demo_status: str | None = None

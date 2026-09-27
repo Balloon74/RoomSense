@@ -90,6 +90,11 @@ class MacActionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "macOS"):
                 ActionRegistry(mac_controls_enabled=True, controller=SpyController())
 
+    def test_configured_volume_step_is_passed_to_native_controller(self):
+        with patch("roomsense.actions.action_registry.sys.platform", "darwin"):
+            registry = ActionRegistry(mac_controls_enabled=True, volume_step_percent=11)
+        self.assertEqual(registry.controller.volume_step_percent, 11)
+
 
 if __name__ == "__main__":
     unittest.main()

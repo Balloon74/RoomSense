@@ -63,6 +63,7 @@ def run(
     try:
         mac_action_registry = ActionRegistry(
             settings.mac_controls_enabled, history_size=settings.event_feed_size,
+            volume_step_percent=settings.gesture_volume_step_percent,
         )
     except (RuntimeError, ValueError) as exc:
         print(f"RoomSense Mac controls could not be enabled: {exc}", file=sys.stderr)

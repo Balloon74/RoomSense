@@ -126,6 +126,7 @@ class MacControlsTests(unittest.TestCase):
             controller.update((pinch,), timestamp, True)
         fist = make_hand("fist")
         controller.update((fist,), 0.2, True)
+        controller.update((fist,), 0.38, True)
         canceled = controller.update((fist,), 0.56, True)
         self.assertTrue(canceled.cancelled)
         self.assertEqual(canceled.actions, ())
