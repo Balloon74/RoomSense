@@ -81,6 +81,16 @@ class RoomSenseConfig:
     gesture_both_hands_hold_seconds: float = 0.55
     gesture_hold_point_seconds: float = 0.75
     gesture_cooldown_seconds: float = 0.8
+    gesture_min_confidence: float = 0.75
+    gesture_open_palm_hold_seconds: float = 0.5
+    gesture_pinch_hold_seconds: float = 0.15
+    gesture_pinch_ratio: float = 0.30
+    gesture_fist_hold_seconds: float = 0.35
+    gesture_min_samples: int = 3
+    gesture_swipe_min_duration_seconds: float = 0.08
+    gesture_volume_movement_threshold: float = 0.08
+    gesture_volume_step_percent: int = 5
+    gesture_volume_update_interval_seconds: float = 0.25
     command_mode_timeout_seconds: float = 12.0
     event_feed_size: int = 8
     session_recording_path: str = "roomsense-session.jsonl"
@@ -88,7 +98,8 @@ class RoomSenseConfig:
 
     def __post_init__(self) -> None:
         for name in ("pointing_min_visibility", "pointing_min_extension",
-                     "hand_detection_confidence", "hand_tracking_confidence"):
+                     "hand_detection_confidence", "hand_tracking_confidence",
+                     "gesture_min_confidence"):
             value = _finite(getattr(self, name), name)
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be between 0 and 1")
@@ -106,13 +117,29 @@ class RoomSenseConfig:
         for name in (
             "gesture_swipe_window_seconds", "gesture_both_hands_hold_seconds",
             "gesture_hold_point_seconds", "command_mode_timeout_seconds",
-            "record_position_interval_seconds",
+            "record_position_interval_seconds", "gesture_open_palm_hold_seconds",
+            "gesture_pinch_hold_seconds", "gesture_fist_hold_seconds",
+            "gesture_swipe_min_duration_seconds", "gesture_volume_update_interval_seconds",
         ):
             if _finite(getattr(self, name), name) <= 0.0:
                 raise ValueError(f"{name} must be positive")
         swipe_distance = _finite(self.gesture_swipe_distance, "gesture_swipe_distance")
         if not 0.0 < swipe_distance <= 1.0:
             raise ValueError("gesture_swipe_distance must be in (0, 1]")
+        pinch_ratio = _finite(self.gesture_pinch_ratio, "gesture_pinch_ratio")
+        if not 0.0 < pinch_ratio < 1.0:
+            raise ValueError("gesture_pinch_ratio must be in (0, 1)")
+        movement = _finite(self.gesture_volume_movement_threshold,
+                            "gesture_volume_movement_threshold")
+        if not 0.0 < movement <= 1.0:
+            raise ValueError("gesture_volume_movement_threshold must be in (0, 1]")
+        if isinstance(self.gesture_min_samples, bool) or not isinstance(self.gesture_min_samples, int) \
+                or self.gesture_min_samples < 2:
+            raise ValueError("gesture_min_samples must be an integer of at least 2")
+        if isinstance(self.gesture_volume_step_percent, bool) \
+                or not isinstance(self.gesture_volume_step_percent, int) \
+                or not 1 <= self.gesture_volume_step_percent <= 100:
+            raise ValueError("gesture_volume_step_percent must be an integer from 1 to 100")
         if isinstance(self.event_feed_size, bool) or not isinstance(self.event_feed_size, int) \
                 or self.event_feed_size <= 0:
             raise ValueError("event_feed_size must be a positive integer")

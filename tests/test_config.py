@@ -69,6 +69,22 @@ class RoomSenseV2ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RoomSenseConfig(hand_model_path="   ")
 
+    def test_mac_gesture_thresholds_are_validated(self):
+        for field, value in (
+            ("gesture_min_confidence", 1.1),
+            ("gesture_open_palm_hold_seconds", 0.0),
+            ("gesture_pinch_hold_seconds", -0.1),
+            ("gesture_pinch_ratio", 1.0),
+            ("gesture_fist_hold_seconds", float("nan")),
+            ("gesture_min_samples", 1),
+            ("gesture_swipe_min_duration_seconds", 0.0),
+            ("gesture_volume_movement_threshold", 0.0),
+            ("gesture_volume_step_percent", 0),
+            ("gesture_volume_update_interval_seconds", -1.0),
+        ):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                RoomSenseConfig(**{field: value})
+
     def test_room_object_configuration_is_validated_when_config_is_created(self):
         with self.assertRaisesRegex(ValueError, "RoomObjectConfig"):
             RoomSenseConfig(room_objects=("invalid",))
