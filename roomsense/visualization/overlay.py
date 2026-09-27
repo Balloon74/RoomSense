@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
+from roomsense.actions.action_registry import ActionResult, MacAction
 from roomsense.calibration.camera_calibration import Calibration
+from roomsense.gestures.mac_controls import GestureStatus
 from roomsense.interactions.events import RoomSenseEvent
 from roomsense.interactions.modes import InteractionMode
 from roomsense.spatial.floor_position import FloorPosition
@@ -35,7 +37,9 @@ class TrackingOverlay:
              recent_events: Sequence[RoomSenseEvent] = (), demo_status: str | None = None,
              recorder_active: bool = False, objects: Sequence[RoomObject] = (),
              debug_state: Mapping[str, object] | None = None, evaluation_active: bool = False,
-             pointing_status: str = "", hands: Sequence[HandObservation] = ()) -> Any:
+             pointing_status: str = "", hands: Sequence[HandObservation] = (),
+             command_gesture: GestureStatus | None = None,
+             action_results: Sequence[ActionResult] = (), mac_controls_enabled: bool = False) -> Any:
         import cv2
 
         height, width = frame.shape[:2]
@@ -102,6 +106,7 @@ class TrackingOverlay:
             frame, pointing, target, recent_events, demo_status, recorder_active,
             evaluation_active, pointing_status,
         )
+        self._draw_command_panel(frame, mode, command_gesture, action_results, mac_controls_enabled)
         if debug and debug_state is not None:
             self._draw_interaction_debug(
                 frame,
@@ -128,6 +133,56 @@ class TrackingOverlay:
         if hand_debug_layout is not None:
             self._draw_hand_debug(frame, hands, hand_debug_layout)
         return frame
+
+    def _draw_command_panel(
+        self, frame: Any, mode: InteractionMode | str, status: GestureStatus | None,
+        action_results: Sequence[ActionResult], mac_controls_enabled: bool,
+    ) -> None:
+        import cv2
+
+        height, width = frame.shape[:2]
+        if height < 180 or width < 260:
+            return
+        mode_name = mode.value if isinstance(mode, InteractionMode) else str(mode)
+        command_on = mode_name == InteractionMode.COMMAND.value
+        panel_width = min(430, width - 30)
+        left = max(15, min(470, width - panel_width - 15))
+        top = 15 if width >= 900 else max(170, height - 205)
+        line_height = 17 if width < 500 else 19
+        feed = tuple(action_results[-3:])
+        panel_height = 22 + line_height * (7 + len(feed))
+        bottom = min(height - 8, top + panel_height)
+        cv2.rectangle(frame, (left, top), (left + panel_width, bottom), (13, 22, 30), -1)
+        cv2.rectangle(frame, (left, top), (left + panel_width, bottom), (58, 176, 194), 1)
+        color = (80, 230, 140) if command_on else (145, 165, 170)
+        font_scale = 0.34 if width < 500 else 0.38
+        y = top + 20
+
+        def row(text: str, row_color=(205, 220, 222)) -> None:
+            nonlocal y
+            cv2.putText(frame, text[:52], (left + 10, y), cv2.FONT_HERSHEY_SIMPLEX,
+                        font_scale, row_color, 1, cv2.LINE_AA)
+            y += line_height
+
+        row(f"COMMAND MODE: {'ON' if command_on else 'OFF'}", color)
+        row(f"CONTROL: {'REAL MAC CONTROLS' if mac_controls_enabled else 'DRY RUN'}")
+        row(f"GESTURE: {status.gesture if status and status.gesture else '--'}")
+        latest = (status.actions[-1].action if status and status.actions else
+                  (action_results[-1].action if action_results else None))
+        labels = {
+            MacAction.NEXT_TRACK: "NEXT TRACK", MacAction.PREVIOUS_TRACK: "PREVIOUS TRACK",
+            MacAction.PLAY_PAUSE: "PLAY/PAUSE", MacAction.VOLUME_UP: "VOLUME UP",
+            MacAction.VOLUME_DOWN: "VOLUME DOWN",
+        }
+        row(f"ACTION: {labels.get(latest, '--')}", (90, 235, 155) if latest else (145, 165, 170))
+        row(f"COOLDOWN: {status.cooldown_seconds:.1f}s" if status else "COOLDOWN: 0.0s")
+        row(f"CONFIDENCE: {status.confidence:.2f}" if status else "CONFIDENCE: 0.00")
+        row("ACTION FEED", (115, 205, 215))
+        for result in reversed(feed):
+            row(f"{result.timestamp:.1f}s {result.message}")
+        if status and status.cancelled:
+            cv2.putText(frame, "GESTURE CANCELLED", (left + 10, min(height - 3, y)),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (80, 180, 245), 1, cv2.LINE_AA)
 
     def _draw_hands(
         self, frame: Any, body_landmarks: Mapping[str, Landmark] | None,

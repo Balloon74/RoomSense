@@ -78,6 +78,11 @@ class HandObservation:
         object.__setattr__(self, "fingertips", MappingProxyType(dict(self.fingertips)))
         object.__setattr__(self, "finger_states", MappingProxyType(dict(self.finger_states)))
 
+    @property
+    def confidence(self) -> float:
+        """Compatibility name used by the gesture command recognizer."""
+        return self.tracking_confidence
+
 
 def analyze_hand(
     points: Sequence[HandPoint], handedness: str, tracking_confidence: float,

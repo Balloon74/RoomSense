@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import product
 import math
 from pathlib import Path
@@ -22,6 +22,25 @@ HAND_MODEL_URL = (
 )
 
 
+@dataclass(frozen=True)
+class TrackedHand:
+    """Lightweight hand value used by isolated gesture controller callers."""
+
+    handedness: str
+    landmarks: tuple[HandPoint, ...]
+    confidence: float
+
+    def __post_init__(self) -> None:
+        side = self.handedness.lower() if isinstance(self.handedness, str) else ""
+        if side not in ("left", "right"):
+            raise ValueError("handedness must be left or right")
+        object.__setattr__(self, "handedness", side)
+        if len(self.landmarks) != 21:
+            raise ValueError("tracked hand must contain exactly 21 landmarks")
+        if not math.isfinite(self.confidence) or not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("hand confidence must be between 0 and 1")
+
+
 class HandTracker:
     """Find up to two hands from RGB video frames and return smoothed observations."""
 
@@ -33,7 +52,7 @@ class HandTracker:
 
         self.config = config
         self._mp = mp
-        model_path = self._cached_model_path()
+        model_path = Path(config.hand_model_path).expanduser() if config.hand_model_path else self._cached_model_path()
         if not model_path.exists():
             self._download_model(model_path)
         vision = mp.tasks.vision

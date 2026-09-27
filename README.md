@@ -19,6 +19,8 @@ This installs the `roomsense` command and the compatible camera and tracking dep
 
 On first run, MediaPipe downloads the Pose Landmarker and Hand Landmarker models and caches them under `~/.cache/roomsense/`. This needs an internet connection once. To use a pose model file you already have, pass its path as `RoomSenseConfig(pose_model_path="/path/to/model.task")` when launching from Python.
 
+Hand commands use a separate Hand Landmarker model, downloaded on first use and cached at `~/.cache/roomsense/hand_landmarker.task`. Set `hand_model_path` in `RoomSenseConfig` to use a local copy. If the hand model is unavailable, RoomSense reports that hand tracking is unavailable and continues pose and spatial tracking.
+
 On first launch, allow camera access for the terminal or app in **System Settings → Privacy & Security → Camera**. On macOS, RoomSense selects the built-in Mac camera by device type and matches OpenCV's device ordering, so a nearby iPhone Continuity Camera is not selected accidentally. On other systems, the default camera index is `0`. Camera size, pose confidence, smoothing, and movement thresholds are configurable in `roomsense/config.py`. Set `camera_index` in `RoomSenseConfig` only when you intentionally want to select a different camera.
 
 ## Run
@@ -58,6 +60,16 @@ Supported stable hand states are **OPEN PALM**, **CLOSED FIST**, **POINTING**, *
 Press `D` to show each hand's five finger states, pinch distance, tracking-confidence estimate, palm angle and approximate normal, and body-wrist association. Confidence combines MediaPipe's handedness score with landmark validity; it is an estimate rather than a calibrated hand-detection probability. Palm orientation and distances are approximate image-relative measurements, not physical 3D coordinates.
 
 The hand model is cached at `~/.cache/roomsense/hand_landmarker.task`. One hand-model inference runs per camera frame in addition to pose inference, so hand tracking can lower achievable frame rate depending on the Mac and camera resolution. RoomSense targets the configured `max_fps`; the preview's FPS is the runtime measurement. Reducing `camera_width` and `camera_height` in `RoomSenseConfig` reduces inference work.
+
+## Gesture-based Mac controls
+
+Mac controls are disabled by default and run in dry-run mode by default. Dry-run actions appear in the HUD and event feed without sending commands to macOS.
+
+Enable real controls from the command line with `roomsense --enable-mac-controls`, or in Python with `RoomSenseConfig(mac_controls_enabled=True)`. Use `--dry-run` to force simulation. The command-line options are mutually exclusive. Real control is available only on macOS and may require Accessibility permission for the launching app.
+
+Hold both hands above the shoulders for the configured duration to enter command mode, then repeat to leave it. Command mode exits after `command_mode_timeout_seconds` without an accepted action. Once active, swipe right or left to change tracks, hold an open palm to play or pause, move a pinched hand up or down to adjust volume, and hold a fist to cancel a gesture that is still pending. The HUD shows command mode, dry-run or real control state, recognized gesture, cooldown, confidence, and recent action results.
+
+Hand recognition depends on framing, lighting, visibility, and MediaPipe confidence. Tune gesture timing and movement thresholds in `RoomSenseConfig`. Tests use fake observations and mocked controllers, so they do not send media or volume commands.
 
 ## Zones
 

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 from time import monotonic, monotonic_ns, sleep
 
 from roomsense.calibration.calibration_store import load_calibration, save_calibration
+from roomsense.actions.action_registry import ActionRegistry as MacActionRegistry
 from roomsense.config import RoomSenseConfig
 from roomsense.gestures.gesture_detector import GestureDetector
 from roomsense.interactions.engine import InteractionEngine, InteractionObservation
@@ -27,14 +30,48 @@ from roomsense.visualization.calibration_view import CalibrationView
 from roomsense.visualization.overlay import TrackingOverlay
 
 
-def run(config: RoomSenseConfig | None = None) -> int:
+def _resolve_mac_controls_config(
+    config: RoomSenseConfig | None, argv: list[str] | None = None,
+) -> RoomSenseConfig:
     settings = config or RoomSenseConfig()
+    parser = argparse.ArgumentParser(
+        prog="roomsense", description="Track a room and optionally enable gesture-based Mac controls."
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--enable-mac-controls", action="store_true",
+                       help="explicitly enable real macOS media and volume controls")
+    group.add_argument("--dry-run", action="store_true",
+                       help="force simulated actions, even if config enables Mac controls")
+    arguments = argv if argv is not None else (sys.argv[1:] if config is None else [])
+    args = parser.parse_args(arguments)
+    if args.enable_mac_controls:
+        return replace(settings, mac_controls_enabled=True)
+    if args.dry_run:
+        return replace(settings, mac_controls_enabled=False)
+    return settings
+
+
+def run(
+    config: RoomSenseConfig | None = None,
+    argv: list[str] | None = None,
+    *, hand_tracker: object | None = None, hand_tracker_factory=None,
+) -> int:
+    settings = _resolve_mac_controls_config(config, argv)
     try:
         import cv2
         import numpy as np
     except ImportError:
         print("OpenCV or NumPy is missing. Activate the project environment and install requirements.txt.",
               file=sys.stderr)
+        return 1
+
+    try:
+        mac_action_registry = MacActionRegistry(
+            settings.mac_controls_enabled, history_size=settings.event_feed_size,
+            volume_step_percent=settings.gesture_volume_step_percent,
+        )
+    except (RuntimeError, ValueError) as exc:
+        print(f"RoomSense Mac controls could not be enabled: {exc}", file=sys.stderr)
         return 1
 
     backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" and hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
@@ -93,12 +130,19 @@ def run(config: RoomSenseConfig | None = None) -> int:
     camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     tracker: PoseTracker | None = None
-    hand_tracker: HandTracker | None = None
+    active_hand_tracker = hand_tracker
     recording_controller: RecordingController | None = None
     evaluation_controller: EvaluationCaptureController | None = None
     try:
         tracker = PoseTracker(settings)
-        hand_tracker = HandTracker(settings)
+        if active_hand_tracker is None:
+            factory = hand_tracker_factory or HandTracker
+            try:
+                active_hand_tracker = factory(settings)
+            except Exception as exc:
+                active_hand_tracker = None
+                print(f"Hand tracking unavailable ({exc}); pose and spatial tracking will continue.",
+                      file=sys.stderr)
         position_tracker = PositionTracker(settings)
         movement_tracker = MovementTracker(
             settings.movement_window_seconds,
@@ -111,7 +155,9 @@ def run(config: RoomSenseConfig | None = None) -> int:
             settings.sitting_leg_ratio,
         )
         overlay = TrackingOverlay()
-        interaction_engine = InteractionEngine(settings, settings.room_objects)
+        interaction_engine = InteractionEngine(
+            settings, settings.room_objects, mac_action_registry=mac_action_registry,
+        )
         recording_controller = RecordingController(
             lambda: SessionRecorder(settings.session_recording_path, settings.record_position_interval_seconds)
         )
@@ -168,7 +214,21 @@ def run(config: RoomSenseConfig | None = None) -> int:
             rgb = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             timestamp_ms = monotonic_ns() // 1_000_000
             landmarks = tracker.process(rgb, timestamp_ms)
-            hands = hand_tracker.process(rgb, timestamp_ms, landmarks)
+            hands = ()
+            if active_hand_tracker is not None:
+                try:
+                    hands = active_hand_tracker.process(rgb, timestamp_ms, landmarks)
+                except TypeError:
+                    # Keep compatibility with small injected trackers that only accept frame and time.
+                    hands = active_hand_tracker.process(rgb, timestamp_ms)
+                except Exception as exc:
+                    print(f"Hand tracking stopped ({exc}); pose and spatial tracking will continue.",
+                          file=sys.stderr)
+                    try:
+                        active_hand_tracker.close()
+                    except Exception:
+                        pass
+                    active_hand_tracker = None
 
             if landmarks:
                 lost_since = None
@@ -236,6 +296,7 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 zone_entered=entered_zones,
                 zone_left=left_zones,
                 movement_state=movement_text,
+                hands=hands,
             ))
             evaluation_controller.record(now, landmarks)
             recording_state = {
@@ -273,6 +334,9 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 evaluation_active=evaluation_controller.active,
                 pointing_status=str(interaction.debug_state.get("pointing_status", "")),
                 hands=hands,
+                command_gesture=interaction.command_gesture,
+                action_results=interaction_engine.mac_action_registry.history,
+                mac_controls_enabled=settings.mac_controls_enabled,
             )
             cv2.imshow(window_name, display)
             key = cv2.waitKey(1) & 0xFF
@@ -339,8 +403,8 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 tracker.close()
         finally:
             try:
-                if hand_tracker is not None:
-                    hand_tracker.close()
+                if active_hand_tracker is not None:
+                    active_hand_tracker.close()
             finally:
                 try:
                     camera.release()
@@ -350,7 +414,7 @@ def run(config: RoomSenseConfig | None = None) -> int:
 
 
 def main() -> None:
-    raise SystemExit(run())
+    raise SystemExit(run(argv=sys.argv[1:]))
 
 
 if __name__ == "__main__":
