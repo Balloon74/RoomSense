@@ -59,6 +59,10 @@ class RoomSenseConfig:
     movement_depth_threshold: float = 0.08
     tracking_lost_seconds: float = 1.0
     pose_model_path: str | None = None
+    hand_model_path: str | None = None
+    hand_detection_confidence: float = 0.55
+    hand_tracking_confidence: float = 0.55
+    mac_controls_enabled: bool = False
     raised_hand_margin: float = 0.04
     sitting_leg_ratio: float = 0.18
     standing_leg_ratio: float = 0.42
@@ -83,10 +87,16 @@ class RoomSenseConfig:
     record_position_interval_seconds: float = 0.5
 
     def __post_init__(self) -> None:
-        for name in ("pointing_min_visibility", "pointing_min_extension"):
+        for name in ("pointing_min_visibility", "pointing_min_extension",
+                     "hand_detection_confidence", "hand_tracking_confidence"):
             value = _finite(getattr(self, name), name)
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be between 0 and 1")
+        if self.hand_model_path is not None and (not isinstance(self.hand_model_path, str)
+                                                   or not self.hand_model_path.strip()):
+            raise ValueError("hand_model_path must be a non-empty path or None")
+        if not isinstance(self.mac_controls_enabled, bool):
+            raise ValueError("mac_controls_enabled must be a boolean")
         smoothing = _finite(self.pointing_smoothing_alpha, "pointing_smoothing_alpha")
         if not 0.0 < smoothing <= 1.0:
             raise ValueError("pointing_smoothing_alpha must be in (0, 1]")

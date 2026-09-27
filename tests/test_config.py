@@ -54,6 +54,21 @@ class RoomSenseV2ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RoomSenseConfig(event_feed_size=0)
 
+    def test_hand_tracking_and_mac_controls_are_safe_by_default(self):
+        config = RoomSenseConfig()
+        self.assertIsNone(config.hand_model_path)
+        self.assertEqual(config.hand_detection_confidence, 0.55)
+        self.assertEqual(config.hand_tracking_confidence, 0.55)
+        self.assertFalse(config.mac_controls_enabled)
+
+    def test_hand_tracking_configuration_is_validated(self):
+        with self.assertRaises(ValueError):
+            RoomSenseConfig(hand_detection_confidence=1.1)
+        with self.assertRaises(ValueError):
+            RoomSenseConfig(hand_tracking_confidence=float("nan"))
+        with self.assertRaises(ValueError):
+            RoomSenseConfig(hand_model_path="   ")
+
     def test_room_object_configuration_is_validated_when_config_is_created(self):
         with self.assertRaisesRegex(ValueError, "RoomObjectConfig"):
             RoomSenseConfig(room_objects=("invalid",))
