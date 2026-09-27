@@ -4,6 +4,8 @@ from unittest.mock import patch
 import numpy as np
 
 from roomsense.calibration.camera_calibration import create_calibration
+from roomsense.actions.action_registry import ActionResult, MacAction
+from roomsense.gestures.mac_controls import GestureStatus
 from roomsense.interactions.events import EventType, RoomSenseEvent
 from roomsense.interactions.modes import InteractionMode
 from roomsense.spatial.room_objects import RoomObject
@@ -84,6 +86,47 @@ class OverlayControlHintTests(unittest.TestCase):
         texts = [call.args[1] for call in draw_text.call_args_list]
         self.assertTrue(any("SMOOTH" in text and "0.8" in text for text in texts))
         self.assertTrue(any("RIGHT_HOLD_POINT" in text for text in texts))
+
+    def test_hud_shows_command_mode_off_and_dry_run(self):
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        import cv2
+        with patch("cv2.putText", wraps=cv2.putText) as draw_text:
+            TrackingOverlay().draw(frame, None, None, "STILL", (), 0.0,
+                                   mode=InteractionMode.NORMAL, mac_controls_enabled=False)
+        texts = [call.args[1] for call in draw_text.call_args_list]
+        self.assertIn("COMMAND MODE: OFF", texts)
+        self.assertIn("CONTROL: DRY RUN", texts)
+
+    def test_hud_shows_gesture_action_confidence_and_cooldown(self):
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        status = GestureStatus("PINCH", 0.91, 0.4, False, ())
+        results = (ActionResult(MacAction.VOLUME_UP, 2.0, "ACTION: VOLUME UP", True, True),)
+        import cv2
+        with patch("cv2.putText", wraps=cv2.putText) as draw_text:
+            TrackingOverlay().draw(frame, None, None, "STILL", (), 0.0,
+                                   mode=InteractionMode.COMMAND, command_gesture=status,
+                                   action_results=results)
+        texts = [call.args[1] for call in draw_text.call_args_list]
+        self.assertIn("COMMAND MODE: ON", texts)
+        self.assertIn("GESTURE: PINCH", texts)
+        self.assertIn("ACTION: VOLUME UP", texts)
+        self.assertIn("COOLDOWN: 0.4s", texts)
+        self.assertIn("CONFIDENCE: 0.91", texts)
+
+    def test_action_log_is_visible_and_bounded(self):
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        actions = tuple(ActionResult(MacAction.NEXT_TRACK, stamp, f"ACTION: TRACK {stamp}", True, True)
+                        for stamp in range(6))
+        import cv2
+        with patch("cv2.putText", wraps=cv2.putText) as draw_text:
+            TrackingOverlay().draw(frame, None, None, "STILL", (), 0.0,
+                                   action_results=actions)
+        texts = [call.args[1] for call in draw_text.call_args_list]
+        action_rows = [text for text in texts if text.startswith("2.0s") or text.startswith("3.0s")
+                       or text.startswith("4.0s") or text.startswith("5.0s")]
+        self.assertEqual(len(action_rows), 3)
+        self.assertTrue(any("ACTION FEED" in text for text in texts))
+        self.assertFalse(any("0.0s ACTION" in text or "1.0s ACTION" in text for text in texts))
 
 
 if __name__ == "__main__":

@@ -194,7 +194,7 @@ class HandGestureController:
                             self._last_volume_action_time = timestamp
                             direction = -1 if delta < 0 else 1
                             self._pinch_anchor_y += direction * self.config.gesture_volume_movement_threshold
-                        return self._status(timestamp, gesture=action.value, actions=actions)
+                        return self._status(timestamp, gesture="PINCH", actions=actions)
         return self._status(timestamp, gesture="PINCH")
 
     def _emit(self, action: MacAction, gesture: str, timestamp: float,

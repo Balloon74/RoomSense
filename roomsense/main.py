@@ -316,6 +316,9 @@ def run(
                 recent_events=interaction.recent_events, demo_status=interaction.demo_status,
                 recorder_active=recording_controller.active, objects=interaction_engine.room_objects.objects,
                 debug_state=interaction.debug_state,
+                command_gesture=interaction.command_gesture,
+                action_results=interaction_engine.mac_action_registry.history,
+                mac_controls_enabled=settings.mac_controls_enabled,
             )
             cv2.imshow(window_name, display)
             key = cv2.waitKey(1) & 0xFF
