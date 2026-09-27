@@ -17,7 +17,7 @@ python -m pip install -r requirements.txt
 
 This installs the `roomsense` command and the compatible camera and tracking dependencies.
 
-MediaPipe downloads the lightweight Pose Landmarker model on the first run and caches it under `~/.cache/roomsense/`. This needs an internet connection once. To use a model file you already have, pass its path as `RoomSenseConfig(pose_model_path="/path/to/model.task")` when launching from Python.
+MediaPipe downloads the lightweight Pose Landmarker model on the first run and caches it under `~/.cache/roomsense/`. Hand commands use a separate Hand Landmarker model, downloaded on first use and cached as `~/.cache/roomsense/hand_landmarker.task`. These downloads need an internet connection once. To use a model file you already have, pass its path as `RoomSenseConfig(pose_model_path="/path/to/model.task", hand_model_path="/path/to/hand_landmarker.task")` when launching from Python. If the hand model is unavailable, RoomSense reports that hand commands are unavailable and continues pose and spatial tracking.
 
 On first launch, allow camera access for the terminal or app in **System Settings → Privacy & Security → Camera**. On macOS, RoomSense selects the built-in Mac camera by device type and matches OpenCV's device ordering, so a nearby iPhone Continuity Camera is not selected accidentally. On other systems, the default camera index is `0`. Camera size, pose confidence, smoothing, and movement thresholds are configurable in `roomsense/config.py`. Set `camera_index` in `RoomSenseConfig` only when you intentionally want to select a different camera.
 
@@ -47,6 +47,37 @@ RoomSense estimates floor contact from visible ankle landmarks, averaging both f
 - `Q` or `Esc`: quit in live mode. `Esc` cancels calibration; `Q` quits from calibration mode.
 
 The HUD shows tracking state, interaction mode, pointing and target confidence, demo-action status, recent events, and recording state alongside existing position and zone information. Debug mode includes arm vectors, gesture history, and cooldowns. The room map shows the calibrated floor rectangle, configured zones and object markers, the estimated person location, direction, and a fading trail of about four seconds. Speed and distance use normalized room units, not meters.
+
+## Gesture-based Mac controls
+
+Mac controls are disabled by default and run in **dry-run mode** by default. In dry-run mode, gestures are recognized and the HUD/event feed displays messages such as `ACTION: NEXT TRACK` and `ACTION: VOLUME UP`; macOS receives no media or volume commands.
+
+To explicitly enable real controls from the command line, run:
+
+```bash
+roomsense --enable-mac-controls
+```
+
+Or opt in from Python with `RoomSenseConfig(mac_controls_enabled=True)`. The command-line `--dry-run` option forces simulation even when the config enables real controls. The options `--enable-mac-controls` and `--dry-run` cannot be used together. Real control is available only on macOS. RoomSense uses built-in `osascript`/System Events commands for media keys and output volume; macOS may ask you to allow the launching app (such as Terminal) under **System Settings → Privacy & Security → Accessibility**.
+
+### Activate and leave COMMAND MODE
+
+The HUD always shows `COMMAND MODE: OFF` or `COMMAND MODE: ON`. Hold **both hands above the shoulders** for the configured `gesture_both_hands_hold_seconds` (0.55 seconds by default) to enter command mode. Repeat the same two-hand gesture to turn it off. If no command is accepted for `command_mode_timeout_seconds` (12 seconds by default), command mode exits automatically. Ordinary movement and pointing do not extend that timeout. The HUD also shows gesture confidence, cooldown, whether controls are in dry-run or real mode, and the latest action results.
+
+Once command mode is on, the initial hand controls are:
+
+| Hand gesture | Result |
+| --- | --- |
+| Swipe right | Next track |
+| Swipe left | Previous track |
+| Open palm held briefly | Play or pause |
+| Thumb and index finger pinched, then move hand up | Volume up |
+| Thumb and index finger pinched, then move hand down | Volume down |
+| Closed fist held briefly | Cancel the pending gesture/action |
+
+The recognizer requires multiple timestamped observations, a minimum confidence of 0.75, and gesture-specific hold times. A swipe must span at least three samples and the configured minimum duration. Open palm, pinch, and fist holds default to 0.5, 0.15, and 0.35 seconds. A held pose fires once until released. Discrete actions have a 0.8-second cooldown. Pinch volume changes are quantized to 5 percentage-point steps after each 0.08 normalized vertical movement and are rate-limited to one update every 0.25 seconds. These defaults and related thresholds can be tuned in `RoomSenseConfig` in `roomsense/config.py`.
+
+A fist clears gestures that are still being recognized; it cannot reverse a media or volume action that has already been dispatched. Hand recognition depends on visible fingers, camera framing, lighting, hand size in the image, and MediaPipe confidence. Occlusion or unusual hand orientation can prevent recognition or classify a pose incorrectly. Tune the configurable thresholds for your camera and range of motion. Tests use fake hands and mocked action controllers, so they never send real media or volume commands.
 
 ## Zones
 
