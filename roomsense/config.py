@@ -58,6 +58,10 @@ class RoomSenseConfig:
     movement_horizontal_threshold: float = 0.08
     movement_depth_threshold: float = 0.08
     tracking_lost_seconds: float = 1.0
+    reidentification_enabled: bool = True
+    reidentification_timeout_seconds: float = 5.0
+    reidentification_confidence_threshold: float = 0.72
+    reidentification_ambiguity_margin: float = 0.12
     pose_model_path: str | None = None
     raised_hand_margin: float = 0.04
     sitting_leg_ratio: float = 0.18
@@ -83,6 +87,15 @@ class RoomSenseConfig:
     record_position_interval_seconds: float = 0.5
 
     def __post_init__(self) -> None:
+        if not isinstance(self.reidentification_enabled, bool):
+            raise ValueError("reidentification_enabled must be a boolean")
+        timeout = _finite(self.reidentification_timeout_seconds, "reidentification_timeout_seconds")
+        if timeout <= 0.0:
+            raise ValueError("reidentification_timeout_seconds must be positive")
+        for name in ("reidentification_confidence_threshold", "reidentification_ambiguity_margin"):
+            value = _finite(getattr(self, name), name)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be between 0 and 1")
         for name in ("pointing_min_visibility", "pointing_min_extension"):
             value = _finite(getattr(self, name), name)
             if not 0.0 <= value <= 1.0:

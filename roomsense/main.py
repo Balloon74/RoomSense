@@ -20,6 +20,11 @@ from roomsense.spatial.zones import Zone, ZoneTracker
 from roomsense.tracking.person_state import MovementTracker
 from roomsense.tracking.position_tracker import PositionTracker
 from roomsense.tracking.pose_tracker import PoseTracker
+from roomsense.tracking.reidentification import (
+    PersonReidentifier,
+    ReidentificationState,
+    TrackObservation,
+)
 from roomsense.visualization.calibration_view import CalibrationView
 from roomsense.visualization.overlay import TrackingOverlay
 
@@ -94,6 +99,14 @@ def run(config: RoomSenseConfig | None = None) -> int:
     try:
         tracker = PoseTracker(settings)
         position_tracker = PositionTracker(settings)
+        person_reidentifier = (
+            PersonReidentifier(
+                settings.reidentification_timeout_seconds,
+                settings.reidentification_confidence_threshold,
+                settings.reidentification_ambiguity_margin,
+            )
+            if settings.reidentification_enabled else None
+        )
         movement_tracker = MovementTracker(
             settings.movement_window_seconds,
             settings.movement_horizontal_threshold,
@@ -123,6 +136,8 @@ def run(config: RoomSenseConfig | None = None) -> int:
         current_floor_position: FloorPosition | None = None
         zone_transition: str | None = None
         debug = False
+        identity_transition: str | None = None
+        identity_transition_until = 0.0
 
         window_name = "RoomSense — Room Tracking"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -178,6 +193,53 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 position = None
                 movement_text = movement_tracker.current.value
                 pose_text = []
+
+            identity_update = None
+            person_state_for_hud = None
+            if person_reidentifier is not None:
+                if landmarks and position is not None:
+                    left_shoulder = landmarks.get("left_shoulder")
+                    right_shoulder = landmarks.get("right_shoulder")
+                    left_hip = landmarks.get("left_hip")
+                    right_hip = landmarks.get("right_hip")
+                    shoulder_width = None
+                    torso_ratio = None
+                    if left_shoulder is not None and right_shoulder is not None:
+                        shoulder_width = ((right_shoulder.x - left_shoulder.x) ** 2
+                                          + (right_shoulder.y - left_shoulder.y) ** 2) ** 0.5
+                        if shoulder_width > 1e-4 and left_hip is not None and right_hip is not None:
+                            shoulder_center = ((left_shoulder.x + right_shoulder.x) / 2.0,
+                                               (left_shoulder.y + right_shoulder.y) / 2.0)
+                            hip_center = ((left_hip.x + right_hip.x) / 2.0,
+                                          (left_hip.y + right_hip.y) / 2.0)
+                            torso_length = ((hip_center[0] - shoulder_center[0]) ** 2
+                                            + (hip_center[1] - shoulder_center[1]) ** 2) ** 0.5
+                            torso_ratio = torso_length / shoulder_width
+                        else:
+                            shoulder_width = None
+                    observation = TrackObservation(
+                        timestamp=now,
+                        x=(position.x + 1.0) / 2.0,
+                        y=(1.0 - position.y) / 2.0,
+                        z=position.z,
+                        shoulder_width=shoulder_width,
+                        torso_ratio=torso_ratio,
+                    )
+                    identity_update = person_reidentifier.update(observation)
+                else:
+                    identity_update = person_reidentifier.update(None, timestamp=now)
+
+                if identity_update.state in (ReidentificationState.NEW, ReidentificationState.REACQUIRED):
+                    identity_transition = identity_update.state.value
+                    identity_transition_until = now + 1.0
+                    person_state_for_hud = identity_transition
+                elif identity_update.state is ReidentificationState.LOST:
+                    identity_transition = None
+                    person_state_for_hud = ReidentificationState.LOST.value
+                elif now < identity_transition_until and identity_transition is not None:
+                    person_state_for_hud = identity_transition
+                else:
+                    person_state_for_hud = ReidentificationState.TRACKED.value
 
             current_floor_position = (
                 floor_tracker.update(landmarks, room_transform)
@@ -258,6 +320,18 @@ def run(config: RoomSenseConfig | None = None) -> int:
                 recent_events=interaction.recent_events, demo_status=interaction.demo_status,
                 recorder_active=recording_controller.active, objects=interaction_engine.room_objects.objects,
                 debug_state=interaction.debug_state,
+                person_id=identity_update.person_id if identity_update is not None else None,
+                person_state=person_state_for_hud,
+                reidentification_debug=(
+                    {
+                        "reason": identity_update.reason,
+                        "confidence": identity_update.confidence,
+                        "threshold": settings.reidentification_confidence_threshold,
+                        "ambiguity_margin": settings.reidentification_ambiguity_margin,
+                        "candidates": identity_update.candidates,
+                    }
+                    if identity_update is not None else None
+                ),
             )
             cv2.imshow(window_name, display)
             key = cv2.waitKey(1) & 0xFF

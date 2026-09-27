@@ -8,10 +8,53 @@ from roomsense.interactions.events import EventType, RoomSenseEvent
 from roomsense.interactions.modes import InteractionMode
 from roomsense.spatial.room_objects import RoomObject
 from roomsense.spatial.target_selection import TargetMatch, TargetUpdate
+from roomsense.tracking.reidentification import CandidateScore
 from roomsense.visualization.overlay import TrackingOverlay
 
 
 class OverlayControlHintTests(unittest.TestCase):
+    def test_person_id_state_and_match_factors_are_visible_in_hud_and_debug(self):
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        candidate = CandidateScore(
+            "PERSON_001",
+            {"trajectory": 0.91, "reentry_direction": 0.84,
+             "elapsed_time": 0.95, "torso_geometry": 0.88},
+            0.89,
+            "ambiguous",
+        )
+        second_candidate = CandidateScore(
+            "PERSON_002",
+            {"trajectory": 0.88, "reentry_direction": 0.82,
+             "elapsed_time": 0.94, "torso_geometry": 0.86},
+            0.86,
+            "ambiguous",
+        )
+        import cv2
+        with patch("cv2.putText", wraps=cv2.putText) as draw_text:
+            TrackingOverlay().draw(
+                frame, None, None, "STILL", (), 0.0, debug=True,
+                person_id="PERSON_001", person_state="REACQUIRED",
+                reidentification_debug={
+                    "reason": "ambiguous_candidates",
+                    "threshold": 0.72,
+                    "ambiguity_margin": 0.12,
+                    "candidates": (candidate, second_candidate),
+                },
+            )
+        texts = [call.args[1] for call in draw_text.call_args_list]
+        self.assertTrue(any("PERSON_001" in text and "REACQUIRED" in text for text in texts))
+        self.assertTrue(any("TRAJ" in text and "0.91" in text and "0.89" in text for text in texts))
+        self.assertTrue(any("PERSON_002" in text and "0.86" in text for text in texts))
+        self.assertTrue(any("0.72" in text and "0.12" in text and "AMBIGUOUS" in text for text in texts))
+        for state in ("NEW", "LOST", "REACQUIRED"):
+            with self.subTest(state=state), patch("cv2.putText", wraps=cv2.putText) as draw_status:
+                TrackingOverlay().draw(
+                    frame.copy(), None, None, "STILL", (), 0.0,
+                    person_id="PERSON_001", person_state=state,
+                )
+            status_text = [call.args[1] for call in draw_status.call_args_list]
+            self.assertTrue(any("PERSON_001" in text and state in text for text in status_text))
+
     def test_live_overlay_displays_calibration_debug_reset_and_quit_controls(self):
         frame = np.zeros((720, 1280, 3), dtype=np.uint8)
         display = TrackingOverlay().draw(frame, None, None, "STILL", (), 0.0)
