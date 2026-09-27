@@ -1,10 +1,13 @@
 import unittest
 
+from roomsense.actions.action_registry import ActionRegistry, MacAction
 from roomsense.config import RoomSenseConfig
 from roomsense.interactions.engine import InteractionEngine, InteractionObservation
 from roomsense.interactions.events import EventType
+from roomsense.interactions.modes import InteractionMode
 from roomsense.spatial.room_objects import RoomObject, RoomObjectRegistry
 from roomsense.tracking.pose_tracker import Landmark
+from roomsense.tracking.hand_tracker import HandPoint, TrackedHand
 
 
 _DEFAULT_POSE = object()
@@ -16,6 +19,26 @@ def pose():
         "left_shoulder": Landmark(0.2, 0.5),
         "left_elbow": Landmark(0.4, 0.5),
         "left_wrist": Landmark(0.6, 0.5),
+    }
+
+
+def open_hand(*, y_offset=0.0):
+    coords = {
+        0: (0.50, 0.90), 1: (0.35, 0.78), 2: (0.28, 0.70), 3: (0.23, 0.63), 4: (0.18, 0.56),
+        5: (0.30, 0.64), 6: (0.30, 0.43), 7: (0.30, 0.31), 8: (0.30, 0.19),
+        9: (0.43, 0.62), 10: (0.43, 0.40), 11: (0.43, 0.27), 12: (0.43, 0.15),
+        13: (0.56, 0.64), 14: (0.56, 0.43), 15: (0.56, 0.31), 16: (0.56, 0.20),
+        17: (0.69, 0.66), 18: (0.69, 0.47), 19: (0.69, 0.36), 20: (0.69, 0.25),
+    }
+    points = tuple(HandPoint(x, y + y_offset, 0.0) for x, y in
+                   (coords[index] for index in range(21)))
+    return TrackedHand("right", points, 0.94)
+
+
+def both_hands_up_pose():
+    return {
+        "left_shoulder": Landmark(0.4, 0.5), "left_wrist": Landmark(0.3, 0.2),
+        "right_shoulder": Landmark(0.6, 0.5), "right_wrist": Landmark(0.7, 0.2),
     }
 
 
@@ -94,6 +117,75 @@ class InteractionEngineTests(unittest.TestCase):
         self.assertIn(EventType.MODE_CHANGED, [event.type for event in entered.events])
         timed_out = engine.update(observation(1.22, landmarks=up))
         self.assertEqual(timed_out.mode.value, "NORMAL")
+
+    def test_mode_off_cannot_dispatch_completed_hand_gesture(self):
+        registry = ActionRegistry()
+        engine = InteractionEngine(self.config, RoomObjectRegistry(), mac_action_registry=registry)
+        for stamp in (0.0, 0.3, 0.6, 0.9):
+            update = engine.update(InteractionObservation(stamp, None, None, (), (), "STILL", (open_hand(),)))
+        self.assertEqual(update.mode.value, "NORMAL")
+        self.assertEqual(update.action_results, ())
+        self.assertEqual(registry.history, ())
+
+    def test_both_hands_up_is_required_to_enter_command_mode(self):
+        engine = InteractionEngine(self.config, RoomObjectRegistry())
+        one_up = {"left_shoulder": Landmark(0.4, 0.5), "left_wrist": Landmark(0.3, 0.2)}
+        engine.update(observation(0.0, landmarks=one_up))
+        still_normal = engine.update(observation(0.3, landmarks=one_up))
+        self.assertEqual(still_normal.mode.value, "NORMAL")
+        engine.update(observation(0.4, landmarks=both_hands_up_pose()))
+        entered = engine.update(observation(1.0, landmarks=both_hands_up_pose()))
+        self.assertEqual(entered.mode.value, "COMMAND")
+
+    def test_only_accepted_command_actions_refresh_timeout(self):
+        config = RoomSenseConfig(
+            command_mode_timeout_seconds=0.8, gesture_both_hands_hold_seconds=0.2,
+            gesture_min_samples=3, gesture_open_palm_hold_seconds=0.3,
+            target_stability_seconds=0.0,
+        )
+        registry = ActionRegistry()
+        engine = InteractionEngine(config, RoomObjectRegistry(), mac_action_registry=registry)
+        engine.update(observation(0.0, landmarks=both_hands_up_pose()))
+        entered = engine.update(observation(0.21, landmarks=both_hands_up_pose()))
+        self.assertEqual(entered.mode.value, "COMMAND")
+        for stamp in (0.3, 0.5, 0.72):
+            update = engine.update(InteractionObservation(stamp, pose(), (0.2, 0.2), (), (), "STILL",
+                                                          (open_hand(),)))
+        self.assertEqual([result.action for result in update.action_results], [MacAction.PLAY_PAUSE])
+        self.assertEqual(engine.update(observation(1.3, landmarks=None)).mode.value, "COMMAND")
+        self.assertEqual(engine.update(observation(1.53, landmarks=None)).mode.value, "NORMAL")
+
+    def test_timeout_clears_pending_gesture_and_exits_once(self):
+        config = RoomSenseConfig(command_mode_timeout_seconds=0.35, gesture_both_hands_hold_seconds=0.2,
+                                 gesture_open_palm_hold_seconds=0.5)
+        registry = ActionRegistry()
+        engine = InteractionEngine(config, RoomObjectRegistry(), mac_action_registry=registry)
+        engine.update(observation(0.0, landmarks=both_hands_up_pose()))
+        engine.update(observation(0.21, landmarks=both_hands_up_pose()))
+        for stamp in (0.25, 0.4, 0.56):
+            update = engine.update(InteractionObservation(stamp, None, None, (), (), "STILL", (open_hand(),)))
+        self.assertEqual(update.mode.value, "NORMAL")
+        self.assertEqual(update.action_results, ())
+        self.assertEqual(engine.update(observation(0.7, landmarks=None)).mode.value, "NORMAL")
+
+    def test_fist_cancel_is_visible_without_dispatching_action(self):
+        registry = ActionRegistry()
+        engine = InteractionEngine(self.config, RoomObjectRegistry(), mac_action_registry=registry)
+        engine.mode_controller._transition(InteractionMode.COMMAND, 0.0, "test")
+        fist_coords = {
+            0: (0.50, 0.90), 1: (0.35, 0.78), 2: (0.28, 0.70), 3: (0.23, 0.63), 4: (0.36, 0.72),
+            5: (0.30, 0.64), 6: (0.30, 0.43), 7: (0.30, 0.31), 8: (0.34, 0.73),
+            9: (0.43, 0.62), 10: (0.43, 0.40), 11: (0.43, 0.27), 12: (0.45, 0.73),
+            13: (0.56, 0.64), 14: (0.56, 0.43), 15: (0.56, 0.31), 16: (0.55, 0.73),
+            17: (0.69, 0.66), 18: (0.69, 0.47), 19: (0.69, 0.36), 20: (0.64, 0.73),
+        }
+        fist = TrackedHand("right", tuple(HandPoint(x, y, 0.0) for x, y in
+                                           (fist_coords[index] for index in range(21))), 0.94)
+        engine.update(InteractionObservation(0.0, None, None, (), (), "STILL", (fist,)))
+        engine.update(InteractionObservation(0.2, None, None, (), (), "STILL", (fist,)))
+        update = engine.update(InteractionObservation(0.4, None, None, (), (), "STILL", (fist,)))
+        self.assertTrue(update.command_gesture.cancelled)
+        self.assertEqual(update.action_results, ())
 
 
 if __name__ == "__main__":

@@ -6,7 +6,9 @@ from dataclasses import dataclass
 import math
 from typing import Mapping
 
+from roomsense.actions.action_registry import ActionRegistry as MacActionRegistry, ActionResult
 from roomsense.config import RoomObjectConfig, RoomSenseConfig
+from roomsense.gestures.mac_controls import GestureStatus, HandGestureController
 from roomsense.gestures.temporal_gestures import GestureTransition, TemporalGestureDetector
 from roomsense.interactions.actions import ActionRegistry, create_demo_action_registry
 from roomsense.interactions.events import EventCollector, EventType, RoomSenseEvent
@@ -15,6 +17,7 @@ from roomsense.spatial.pointing import ArmPointing, PointingEstimator
 from roomsense.spatial.room_objects import RoomObject, RoomObjectRegistry
 from roomsense.spatial.target_selection import TargetMatch, TargetSelector, TargetUpdate
 from roomsense.tracking.pose_tracker import Landmark
+from roomsense.tracking.hand_tracker import TrackedHand
 
 Point = tuple[float, float]
 
@@ -27,6 +30,7 @@ class InteractionObservation:
     zone_entered: tuple[str, ...]
     zone_left: tuple[str, ...]
     movement_state: str
+    hands: tuple[TrackedHand, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,8 @@ class InteractionUpdate:
     recent_events: tuple[RoomSenseEvent, ...]
     demo_status: str | None
     debug_state: Mapping[str, object]
+    command_gesture: GestureStatus = GestureStatus()
+    action_results: tuple[ActionResult, ...] = ()
 
 
 class InteractionEngine:
@@ -47,6 +53,7 @@ class InteractionEngine:
         config: RoomSenseConfig,
         room_objects: RoomObjectRegistry | tuple[RoomObject, ...] | tuple[RoomObjectConfig, ...],
         action_registry: ActionRegistry | None = None,
+        mac_action_registry: MacActionRegistry | None = None,
     ) -> None:
         if isinstance(room_objects, RoomObjectRegistry):
             registry = room_objects
@@ -69,8 +76,12 @@ class InteractionEngine:
         )
         self.gesture_detector = TemporalGestureDetector(config)
         self.mode_controller = InteractionModeController(config.command_mode_timeout_seconds)
+        self.hand_gesture_controller = HandGestureController(config)
         self.event_collector = EventCollector(config.event_feed_size)
         self.action_registry = action_registry or create_demo_action_registry()
+        self.mac_action_registry = mac_action_registry or MacActionRegistry(
+            config.mac_controls_enabled, history_size=config.event_feed_size,
+        )
         self._was_moving = False
         self._demo_status: str | None = None
 
@@ -96,13 +107,22 @@ class InteractionEngine:
             movement_event = (EventType.PERSON_STOPPED_MOVING, observation.movement_state)
         self._was_moving = current_moving
 
-        active = bool(
-            pointing or target.confirmed or gestures or observation.zone_entered or observation.zone_left
-            or movement_event
+        # The timeout is checked before any same-frame hand command is considered.
+        # Only an accepted command action refreshes command-mode activity.
+        mode_transition = self.mode_controller.update(gestures, timestamp)
+        if mode_transition and mode_transition.current is InteractionMode.NORMAL:
+            self.hand_gesture_controller.reset()
+        command_gesture = self.hand_gesture_controller.update(
+            observation.hands, timestamp,
+            command_mode=self.mode_controller.mode is InteractionMode.COMMAND,
         )
-        mode_transition = self.mode_controller.update(gestures, timestamp, activity=active)
+        action_results = tuple(self.mac_action_registry.dispatch(intent)
+                               for intent in command_gesture.actions)
+        if any(result.succeeded for result in action_results):
+            self.mode_controller.update((), timestamp, activity=True)
         context = {
             "mode": self.mode_controller.mode.value,
+            "command_gesture": command_gesture,
             "target_id": target.confirmed.object.id if target.confirmed else None,
             "target_name": target.confirmed.object.name if target.confirmed else None,
             "room_position": observation.room_position,
@@ -161,6 +181,8 @@ class InteractionEngine:
             recent_events=self.event_collector.recent,
             demo_status=self._demo_status,
             debug_state=debug,
+            command_gesture=command_gesture,
+            action_results=action_results,
         )
 
 

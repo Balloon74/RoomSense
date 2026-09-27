@@ -49,6 +49,12 @@ class InteractionModeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             controller.update((), 0.0)
 
+    def test_one_raised_hand_does_not_enter_command_mode(self):
+        controller = InteractionModeController(command_timeout_seconds=2.0)
+        one_hand = (GestureTransition("LEFT_HAND_UP", 0.5, 0.95, {}),)
+        self.assertIsNone(controller.update(one_hand, 0.5))
+        self.assertEqual(controller.mode, InteractionMode.NORMAL)
+
 
 if __name__ == "__main__":
     unittest.main()
