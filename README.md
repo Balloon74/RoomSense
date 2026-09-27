@@ -43,13 +43,13 @@ RoomSense estimates floor contact from visible ankle landmarks, averaging both f
 ## Controls
 
 - `C`: calibrate or recalibrate the floor.
-- `D`: toggle body and hand diagnostics, including raw/smoothed floor position, arm vectors, finger states, pinch distance, hand confidence and orientation, and wrist association.
+- `D`: toggle body, hand, and anonymous track continuity diagnostics, including raw/smoothed floor position, hand geometry, and re-identification candidate scores.
 - `R`: reset clicked calibration points in calibration mode; reset spatial trail, direction, speed, zone state, and session distance in live mode.
 - `V`: start or stop optional JSONL session recording. Recording is off at startup and closes on quit.
 - `E`: start or stop a separate landmark-only evaluation capture. Evaluation capture is off at startup and closes on quit.
 - `Q` or `Esc`: quit in live mode. `Esc` cancels calibration; `Q` quits from calibration mode.
 
-The HUD shows tracking state, interaction mode, pointing availability and target confidence, demo-action status, recent events, and both recording states alongside existing position and zone information. Debug mode includes arm vectors, gesture history, and cooldowns. The room map shows the calibrated floor rectangle, configured zones and object markers, the estimated person location, direction, and a fading trail of about four seconds. Speed and distance use normalized room units, not meters.
+The HUD shows temporary person ID and tracking state, interaction mode, pointing availability and target confidence, demo-action status, recent events, and both recording states alongside existing position and zone information. Debug mode includes hand diagnostics, arm vectors, gesture history, cooldowns, and re-identification candidate scores. The room map shows the calibrated floor rectangle, configured zones and object markers, the estimated person location, direction, and a fading trail of about four seconds. Speed and distance use normalized room units, not meters.
 
 ## Hand and finger tracking
 
@@ -70,6 +70,14 @@ Enable real controls from the command line with `roomsense --enable-mac-controls
 Hold both hands above the shoulders for the configured duration to enter command mode, then repeat to leave it. Command mode exits after `command_mode_timeout_seconds` without an accepted action. Once active, swipe right or left to change tracks, hold an open palm to play or pause, move a pinched hand up or down to adjust volume, and hold a fist to cancel a gesture that is still pending. The HUD shows command mode, dry-run or real control state, recognized gesture, cooldown, confidence, and recent action results.
 
 Hand recognition depends on framing, lighting, visibility, and MediaPipe confidence. Tune gesture timing and movement thresholds in `RoomSenseConfig`. Tests use fake observations and mocked controllers, so they do not send media or volume commands.
+
+## Anonymous track continuity
+
+RoomSense assigns temporary IDs such as `PERSON_001` and `PERSON_002` during one application run. A new track is `NEW`, an observed track is `TRACKED`, a missing track is `LOST`, and a confident return is `REACQUIRED`. The short-term lost-track registry expires entries after five seconds by default. Configure `reidentification_timeout_seconds`, `reidentification_confidence_threshold`, and `reidentification_ambiguity_margin` in `RoomSenseConfig`; set `reidentification_enabled=False` to disable it.
+
+Matching combines predicted position and trajectory (45%), likely re-entry direction (25%), time since loss (15%), and coarse torso geometry (15%). A candidate must score at least `0.72` by default and lead the next candidate by at least `0.12`. If confidence is low or candidates are too close, RoomSense assigns a new anonymous ID. Press `D` to see candidate IDs, factor scores, thresholds, and the match or rejection reason.
+
+This feature does not use face matching, clothing descriptors, frame crops, or appearance embeddings. IDs and continuity data stay in memory and are discarded on application exit or timeout; they are not written into session recordings or evaluation captures. Single-camera track continuity can miss or confuse returning people during occlusion, abrupt movement, similar body geometry, or pose errors. The current pose model tracks one person at a time, so RoomSense does not maintain simultaneous tracks for multiple visible people. These temporary labels do not identify a person in the real world.
 
 ## Zones
 
@@ -157,6 +165,7 @@ roomsense/
     hand_tracker.py               MediaPipe two-hand video inference
     hand_geometry.py              camera-free landmark geometry and finger states
     hand_classifier.py            stable hand states and body-wrist association
+    reidentification.py            in-memory anonymous lost-track matching
     position_tracker.py           V1 normalized X/Y and relative-depth estimate
     person_state.py               V1 movement classifier
   spatial/

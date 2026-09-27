@@ -19,6 +19,7 @@ from roomsense.spatial.zones import Zone
 from roomsense.tracking.hand_geometry import HAND_CONNECTIONS, HandObservation
 from roomsense.tracking.position_tracker import Position
 from roomsense.tracking.pose_tracker import Landmark, SKELETON_CONNECTIONS
+from roomsense.tracking.reidentification import CandidateScore
 from roomsense.visualization.room_map import RoomMap
 
 
@@ -39,7 +40,9 @@ class TrackingOverlay:
              debug_state: Mapping[str, object] | None = None, evaluation_active: bool = False,
              pointing_status: str = "", hands: Sequence[HandObservation] = (),
              command_gesture: GestureStatus | None = None,
-             action_results: Sequence[ActionResult] = (), mac_controls_enabled: bool = False) -> Any:
+             action_results: Sequence[ActionResult] = (), mac_controls_enabled: bool = False,
+             person_id: str | None = None, person_state: str | None = None,
+             reidentification_debug: Mapping[str, object] | None = None) -> Any:
         import cv2
 
         height, width = frame.shape[:2]
@@ -63,6 +66,8 @@ class TrackingOverlay:
                     0.52, (113, 224, 234), 1, cv2.LINE_AA)
         color = (80, 230, 140) if landmarks else (60, 160, 240)
         status = "TRACKING  /  1 PERSON" if landmarks else ("SEARCHING FOR PERSON" if not lost else "TRACK LOST")
+        if person_id and person_state:
+            status = f"{status}  /  {person_id} {person_state}"
         cv2.circle(frame, (31, 61), 5, color, -1, cv2.LINE_AA)
         cv2.putText(frame, status, (44, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.44, color, 1, cv2.LINE_AA)
         if position:
@@ -114,6 +119,8 @@ class TrackingOverlay:
                 y_positions=hand_debug_layout["interaction_y"] if hand_debug_layout else None,
                 max_chars=hand_debug_layout["interaction_chars"] if hand_debug_layout else 180,
             )
+        if debug and reidentification_debug is not None:
+            self._draw_reidentification_debug(frame, reidentification_debug)
         cv2.putText(frame, "C CALIBRATE   D DEBUG   R RESET   V RECORD   E EVAL   Q/ESC QUIT", (15, height - 82),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.34, (165, 190, 195), 1, cv2.LINE_AA)
         if width >= 500 and height >= 350:
@@ -183,6 +190,37 @@ class TrackingOverlay:
         if status and status.cancelled:
             cv2.putText(frame, "GESTURE CANCELLED", (left + 10, min(height - 3, y)),
                         cv2.FONT_HERSHEY_SIMPLEX, font_scale, (80, 180, 245), 1, cv2.LINE_AA)
+
+    def _draw_reidentification_debug(self, frame: Any, debug_state: Mapping[str, object]) -> None:
+        import cv2
+
+        height, width = frame.shape[:2]
+        raw_candidates = debug_state.get("candidates", ())
+        candidates = tuple(item for item in raw_candidates if isinstance(item, CandidateScore)) \
+            if isinstance(raw_candidates, Sequence) else ()
+        compact = width < 900
+        max_rows = max(1, (height - (205 if compact else 80)) // 14)
+        visible = candidates[:max_rows]
+        reason = str(debug_state.get("reason", "unknown")).upper()
+        threshold = float(debug_state.get("threshold", 0.0))
+        margin = float(debug_state.get("ambiguity_margin", 0.0))
+        x, y = (15, 178) if compact else (max(15, width - 505), 25)
+        bottom = min(height - 8, y + (len(visible) + 1) * 14 + 8)
+        if bottom > y:
+            cv2.rectangle(frame, (x, y - 12), (width - 15, bottom), (13, 22, 30), -1)
+        cv2.putText(frame, f"RE-ID {reason}  THR {threshold:.2f}  MARGIN {margin:.2f}",
+                    (x + 6, y), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (125, 226, 230), 1, cv2.LINE_AA)
+        for index, candidate in enumerate(visible, start=1):
+            factors = candidate.factors
+            detail = (
+                f"CAND {candidate.person_id} TRAJ {factors.get('trajectory', 0.0):.2f}"
+                f" DIR {factors.get('reentry_direction', 0.0):.2f}"
+                f" TIME {factors.get('elapsed_time', 0.0):.2f}"
+                f" BODY {factors.get('torso_geometry', 0.0):.2f}"
+                f" SCORE {candidate.score:.2f} {candidate.reason.upper()}"
+            )
+            cv2.putText(frame, detail[:150], (x + 6, y + index * 14),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.28, (220, 235, 230), 1, cv2.LINE_AA)
 
     def _draw_hands(
         self, frame: Any, body_landmarks: Mapping[str, Landmark] | None,

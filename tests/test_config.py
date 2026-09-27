@@ -4,6 +4,27 @@ from roomsense.config import DEFAULT_ROOM_OBJECTS, DEFAULT_ZONE_POLYGONS, RoomOb
 
 
 class RoomSenseV2ConfigTests(unittest.TestCase):
+    def test_reidentification_settings_have_safe_defaults(self):
+        config = RoomSenseConfig()
+        self.assertIs(config.reidentification_enabled, True)
+        self.assertEqual(config.reidentification_timeout_seconds, 5.0)
+        self.assertEqual(config.reidentification_confidence_threshold, 0.72)
+        self.assertEqual(config.reidentification_ambiguity_margin, 0.12)
+
+    def test_reidentification_settings_reject_invalid_values(self):
+        invalid_configs = (
+            {"reidentification_timeout_seconds": 0.0},
+            {"reidentification_timeout_seconds": float("nan")},
+            {"reidentification_confidence_threshold": -0.1},
+            {"reidentification_confidence_threshold": 1.1},
+            {"reidentification_ambiguity_margin": -0.1},
+            {"reidentification_ambiguity_margin": 1.1},
+            {"reidentification_enabled": 1},
+        )
+        for values in invalid_configs:
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                RoomSenseConfig(**values)
+
     def test_configuration_has_local_calibration_and_spatial_defaults(self):
         config = RoomSenseConfig()
         self.assertEqual(config.calibration_path, "calibration.json")

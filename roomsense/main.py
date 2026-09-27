@@ -26,6 +26,11 @@ from roomsense.tracking.person_state import MovementTracker
 from roomsense.tracking.position_tracker import PositionTracker
 from roomsense.tracking.hand_tracker import HandTracker
 from roomsense.tracking.pose_tracker import PoseTracker
+from roomsense.tracking.reidentification import (
+    PersonReidentifier,
+    ReidentificationState,
+    observation_from_position,
+)
 from roomsense.visualization.calibration_view import CalibrationView
 from roomsense.visualization.overlay import TrackingOverlay
 
@@ -49,6 +54,12 @@ def _resolve_mac_controls_config(
     if args.dry_run:
         return replace(settings, mac_controls_enabled=False)
     return settings
+
+
+def reset_tracking_smoothing(pose_tracker: PoseTracker, position_tracker: PositionTracker) -> None:
+    """Start a fresh coordinate segment after pose detection drops out."""
+    position_tracker.reset()
+    pose_tracker.reset_smoothing()
 
 
 def run(
@@ -144,6 +155,14 @@ def run(
                 print(f"Hand tracking unavailable ({exc}); pose and spatial tracking will continue.",
                       file=sys.stderr)
         position_tracker = PositionTracker(settings)
+        person_reidentifier = (
+            PersonReidentifier(
+                settings.reidentification_timeout_seconds,
+                settings.reidentification_confidence_threshold,
+                settings.reidentification_ambiguity_margin,
+            )
+            if settings.reidentification_enabled else None
+        )
         movement_tracker = MovementTracker(
             settings.movement_window_seconds,
             settings.movement_horizontal_threshold,
@@ -178,6 +197,8 @@ def run(
         current_floor_position: FloorPosition | None = None
         zone_transition: str | None = None
         debug = False
+        identity_transition: str | None = None
+        identity_transition_until = 0.0
 
         window_name = "RoomSense — Room Tracking"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -241,6 +262,7 @@ def run(
             else:
                 if lost_since is None:
                     lost_since = now
+                    reset_tracking_smoothing(tracker, position_tracker)
                 lost = now - lost_since >= settings.tracking_lost_seconds
                 if lost:
                     position_tracker.reset()
@@ -249,6 +271,28 @@ def run(
                 position = None
                 movement_text = movement_tracker.current.value
                 pose_text = []
+
+            identity_update = None
+            person_state_for_hud = None
+            if person_reidentifier is not None:
+                if landmarks and position is not None:
+                    identity_update = person_reidentifier.update(
+                        observation_from_position(now, position, landmarks)
+                    )
+                else:
+                    identity_update = person_reidentifier.update(None, timestamp=now)
+
+                if identity_update.state in (ReidentificationState.NEW, ReidentificationState.REACQUIRED):
+                    identity_transition = identity_update.state.value
+                    identity_transition_until = now + 1.0
+                    person_state_for_hud = identity_transition
+                elif identity_update.state is ReidentificationState.LOST:
+                    identity_transition = None
+                    person_state_for_hud = ReidentificationState.LOST.value
+                elif now < identity_transition_until and identity_transition is not None:
+                    person_state_for_hud = identity_transition
+                else:
+                    person_state_for_hud = ReidentificationState.TRACKED.value
 
             current_floor_position = (
                 floor_tracker.update(landmarks, room_transform)
@@ -337,6 +381,18 @@ def run(
                 command_gesture=interaction.command_gesture,
                 action_results=interaction_engine.mac_action_registry.history,
                 mac_controls_enabled=settings.mac_controls_enabled,
+                person_id=identity_update.person_id if identity_update is not None else None,
+                person_state=person_state_for_hud,
+                reidentification_debug=(
+                    {
+                        "reason": identity_update.reason,
+                        "confidence": identity_update.confidence,
+                        "threshold": settings.reidentification_confidence_threshold,
+                        "ambiguity_margin": settings.reidentification_ambiguity_margin,
+                        "candidates": identity_update.candidates,
+                    }
+                    if identity_update is not None else None
+                ),
             )
             cv2.imshow(window_name, display)
             key = cv2.waitKey(1) & 0xFF
