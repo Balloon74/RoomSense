@@ -60,6 +60,8 @@ class RoomSenseConfig:
     tracking_lost_seconds: float = 1.0
     reidentification_enabled: bool = True
     reidentification_timeout_seconds: float = 5.0
+    # Candidate score weights: trajectory .45, re-entry direction .25,
+    # elapsed time .15, and torso geometry .15 (when both poses provide it).
     reidentification_confidence_threshold: float = 0.72
     reidentification_ambiguity_margin: float = 0.12
     pose_model_path: str | None = None

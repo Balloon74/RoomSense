@@ -55,6 +55,20 @@ class OverlayControlHintTests(unittest.TestCase):
             status_text = [call.args[1] for call in draw_status.call_args_list]
             self.assertTrue(any("PERSON_001" in text and state in text for text in status_text))
 
+    def test_compact_reidentification_debug_panel_does_not_cover_person_hud(self):
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        candidate = CandidateScore("PERSON_001", {"trajectory": 0.8}, 0.8, "selected")
+        import cv2
+        with patch("cv2.rectangle", wraps=cv2.rectangle) as draw_rect:
+            TrackingOverlay().draw(
+                frame, None, None, "STILL", (), 0.0, debug=True,
+                person_id="PERSON_001", person_state="REACQUIRED",
+                reidentification_debug={"reason": "reacquired", "candidates": (candidate,)},
+            )
+        reid_panel_top_left, reid_panel_bottom_right = draw_rect.call_args_list[-1].args[1:3]
+        self.assertGreaterEqual(reid_panel_top_left[1], 162)
+        self.assertLess(reid_panel_top_left[0], reid_panel_bottom_right[0])
+
     def test_live_overlay_displays_calibration_debug_reset_and_quit_controls(self):
         frame = np.zeros((720, 1280, 3), dtype=np.uint8)
         display = TrackingOverlay().draw(frame, None, None, "STILL", (), 0.0)

@@ -1,10 +1,16 @@
 import unittest
+from types import SimpleNamespace
 
 from roomsense.tracking.reidentification import (
     PersonReidentifier,
     ReidentificationState,
     TrackObservation,
+    observation_from_position,
 )
+from roomsense.config import RoomSenseConfig
+from roomsense.main import reset_tracking_smoothing
+from roomsense.tracking.pose_tracker import Landmark
+from roomsense.tracking.position_tracker import PositionTracker
 
 
 def observation(timestamp: float, x: float, y: float = 0.5, z: float = 0.0) -> TrackObservation:
@@ -19,6 +25,57 @@ def observation(timestamp: float, x: float, y: float = 0.5, z: float = 0.0) -> T
 
 
 class ReidentificationLifecycleTests(unittest.TestCase):
+    def test_return_position_does_not_blend_with_pre_dropout_position(self):
+        class PoseSmoother:
+            def reset_smoothing(self):
+                self.reset = True
+
+        pose_tracker = PoseSmoother()
+        positions = PositionTracker(RoomSenseConfig())
+
+        def pose_at(center_x):
+            return {
+                "left_shoulder": Landmark(center_x - 0.1, 0.4),
+                "right_shoulder": Landmark(center_x + 0.1, 0.4),
+            }
+
+        before_dropout = positions.update(pose_at(0.2))
+        self.assertAlmostEqual(before_dropout.x, -0.6)
+        reset_tracking_smoothing(pose_tracker, positions)
+        returned = positions.update(pose_at(0.8))
+
+        self.assertAlmostEqual(returned.x, 0.6)
+        self.assertTrue(pose_tracker.reset)
+
+    def test_observation_keeps_shoulder_geometry_without_hips(self):
+        position = SimpleNamespace(x=0.0, y=0.0, z=0.2)
+        landmarks = {
+            "left_shoulder": SimpleNamespace(x=0.4, y=0.3),
+            "right_shoulder": SimpleNamespace(x=0.6, y=0.3),
+        }
+
+        result = observation_from_position(1.0, position, landmarks)
+
+        self.assertAlmostEqual(result.shoulder_width, 0.2)
+        self.assertIsNone(result.torso_ratio)
+
+    def test_degenerate_torso_geometry_is_omitted_without_losing_observation(self):
+        point_left = SimpleNamespace(x=0.4, y=0.3)
+        point_right = SimpleNamespace(x=0.6, y=0.3)
+        position = SimpleNamespace(x=0.2, y=-0.2, z=0.1)
+        landmarks = {
+            "left_shoulder": point_left,
+            "right_shoulder": point_right,
+            "left_hip": point_left,
+            "right_hip": point_right,
+        }
+
+        result = observation_from_position(1.0, position, landmarks)
+
+        self.assertEqual((result.x, result.y, result.z), (0.6, 0.6, 0.1))
+        self.assertAlmostEqual(result.shoulder_width, 0.2)
+        self.assertIsNone(result.torso_ratio)
+
     def test_immediate_return_reuses_anonymous_id(self):
         manager = PersonReidentifier()
 
@@ -69,6 +126,30 @@ class ReidentificationLifecycleTests(unittest.TestCase):
         self.assertIsNone(still_lost.person_id)
         self.assertEqual(still_lost.state, ReidentificationState.LOST)
         self.assertEqual(still_lost.reason, "expired")
+
+    def test_lost_registry_expires_while_another_track_remains_visible(self):
+        manager = PersonReidentifier(timeout_seconds=0.5)
+        manager.update(observation(0.0, 0.2))
+        manager.update(None, timestamp=0.1)
+        manager.update(observation(0.2, 0.8))
+
+        for timestamp in (0.4, 0.6, 0.8):
+            manager.update(observation(timestamp, 0.8))
+
+        self.assertNotIn("PERSON_001", manager._lost)
+
+    def test_match_decision_diagnostics_remain_available_while_track_continues(self):
+        manager = PersonReidentifier()
+        manager.update(observation(0.0, 0.5))
+        manager.update(None, timestamp=0.1)
+        returned = manager.update(observation(0.2, 0.5))
+
+        continued = manager.update(observation(0.3, 0.51))
+
+        self.assertEqual(continued.state, ReidentificationState.TRACKED)
+        self.assertEqual(continued.reason, returned.reason)
+        self.assertEqual(continued.candidates, returned.candidates)
+        self.assertEqual(continued.confidence, returned.confidence)
 
     def test_clearly_different_track_is_not_reconnected(self):
         manager = PersonReidentifier()

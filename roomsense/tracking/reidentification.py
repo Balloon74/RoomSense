@@ -59,6 +59,49 @@ class ReidentificationUpdate:
     reason: str
 
 
+def observation_from_position(timestamp: float, position: object,
+                              landmarks: Mapping[str, object]) -> TrackObservation:
+    """Build a safe continuity observation from a normalized position and pose geometry."""
+    shoulder_width = None
+    torso_ratio = None
+    left_shoulder = landmarks.get("left_shoulder")
+    right_shoulder = landmarks.get("right_shoulder")
+    left_hip = landmarks.get("left_hip")
+    right_hip = landmarks.get("right_hip")
+    if left_shoulder is not None and right_shoulder is not None:
+        shoulder_dx = float(getattr(right_shoulder, "x")) - float(getattr(left_shoulder, "x"))
+        shoulder_dy = float(getattr(right_shoulder, "y")) - float(getattr(left_shoulder, "y"))
+        measured_width = sqrt(shoulder_dx ** 2 + shoulder_dy ** 2)
+        if isfinite(measured_width) and measured_width > 1e-4:
+            shoulder_width = measured_width
+            if left_hip is not None and right_hip is not None:
+                shoulder_center = (
+                    (float(getattr(left_shoulder, "x")) + float(getattr(right_shoulder, "x"))) / 2.0,
+                    (float(getattr(left_shoulder, "y")) + float(getattr(right_shoulder, "y"))) / 2.0,
+                )
+                hip_center = (
+                    (float(getattr(left_hip, "x")) + float(getattr(right_hip, "x"))) / 2.0,
+                    (float(getattr(left_hip, "y")) + float(getattr(right_hip, "y"))) / 2.0,
+                )
+                torso_length = sqrt(
+                    (hip_center[0] - shoulder_center[0]) ** 2
+                    + (hip_center[1] - shoulder_center[1]) ** 2
+                )
+                ratio = torso_length / measured_width
+                if isfinite(ratio) and ratio > 0.0:
+                    torso_ratio = ratio
+    x = (float(getattr(position, "x")) + 1.0) / 2.0
+    y = (1.0 - float(getattr(position, "y"))) / 2.0
+    return TrackObservation(
+        timestamp=timestamp,
+        x=x,
+        y=y,
+        z=float(getattr(position, "z")),
+        shoulder_width=shoulder_width,
+        torso_ratio=torso_ratio,
+    )
+
+
 @dataclass(frozen=True)
 class _LostTrack:
     person_id: str
@@ -86,6 +129,9 @@ class PersonReidentifier:
         self._active_history: deque[TrackObservation] = deque(maxlen=2)
         self._lost: dict[str, _LostTrack] = {}
         self._last_timestamp: float | None = None
+        self._last_decision: tuple[float | None, tuple[CandidateScore, ...], str] = (
+            None, (), "new_identity"
+        )
 
     def update(self, observation: TrackObservation | None,
                timestamp: float | None = None) -> ReidentificationUpdate:
@@ -101,9 +147,11 @@ class PersonReidentifier:
         if observation is None:
             return self._mark_lost(current_time)
         if self._active_id is not None:
+            self._discard_expired(current_time)
             self._active_history.append(observation)
+            confidence, candidates, reason = self._last_decision
             return ReidentificationUpdate(
-                self._active_id, ReidentificationState.TRACKED, None, (), "continuous_track"
+                self._active_id, ReidentificationState.TRACKED, confidence, candidates, reason
             )
         return self._start_track(observation, current_time)
 
@@ -147,9 +195,11 @@ class PersonReidentifier:
                                    "selected" if candidate.person_id == selected.person_id else "not_selected")
                     for candidate in scored
                 )
-                return ReidentificationUpdate(
+                result = ReidentificationUpdate(
                     selected.person_id, ReidentificationState.REACQUIRED, selected.score, marked, "reacquired"
                 )
+                self._last_decision = (result.confidence, result.candidates, result.reason)
+                return result
             marked = tuple(
                 CandidateScore(candidate.person_id, candidate.factors, candidate.score,
                                candidate_reason if candidate.score >= selected.score - self.ambiguity_margin
@@ -158,13 +208,17 @@ class PersonReidentifier:
             )
             person_id = self._allocate_id()
             self._activate(person_id, observation)
-            return ReidentificationUpdate(
+            result = ReidentificationUpdate(
                 person_id, ReidentificationState.NEW, selected.score, marked, reason
             )
+            self._last_decision = (result.confidence, result.candidates, result.reason)
+            return result
         person_id = self._allocate_id()
         self._activate(person_id, observation)
         reason = "expired_candidate" if expired else ("new_identity" if person_id == "PERSON_001" else "no_candidate")
-        return ReidentificationUpdate(person_id, ReidentificationState.NEW, None, (), reason)
+        result = ReidentificationUpdate(person_id, ReidentificationState.NEW, None, (), reason)
+        self._last_decision = (result.confidence, result.candidates, result.reason)
+        return result
 
     def _discard_expired(self, timestamp: float) -> bool:
         expired_ids = [

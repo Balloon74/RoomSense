@@ -219,12 +219,13 @@ class TrackingOverlay:
         if not isinstance(candidates, Sequence):
             candidates = ()
         candidates = tuple(candidate for candidate in candidates if isinstance(candidate, CandidateScore))
-        max_rows = max(1, (height - 80) // 14)
+        compact_layout = width < 900
+        max_rows = max(1, (height - (205 if compact_layout else 80)) // 14)
         visible = candidates[:max_rows]
         reason = str(debug_state.get("reason", "unknown")).upper()
         threshold = float(debug_state.get("threshold", 0.0))
         margin = float(debug_state.get("ambiguity_margin", 0.0))
-        x, y = max(15, width - 505), 25
+        x, y = (15, 178) if compact_layout else (max(15, width - 505), 25)
         panel_width = max(1, width - x - 15)
         panel_bottom = min(height - 8, y + (len(visible) + 1) * 14 + 8)
         if panel_bottom > y:
