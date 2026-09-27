@@ -71,7 +71,7 @@
 
 **Interfaces:**
 - Consumes `HandObservation`, `HandState`, and `FingerState` from Task 1, and body `Landmark` from `pose_tracker.py`.
-- Produces `classify_hand(observation: HandObservation) -> HandState | None`, `TemporalHandClassifier.update(hand_key: str, candidate: HandState | None) -> HandState | None`, and `associate_hands(hands: Sequence[HandObservation], body_landmarks: Mapping[str, Landmark]) -> tuple[HandObservation, ...]`.
+- Produces `classify_hand(observation: HandObservation) -> HandState | None`, `TemporalHandClassifier.update(hand_key: str, candidate: HandState | None) -> HandState | None`, and `associate_hands(hands: Sequence[HandObservation], body_landmarks: Mapping[str, Landmark], max_distance_ratio: float = 0.75) -> tuple[HandObservation, ...]`.
 - Uses three consecutive candidate observations before a new state is adopted; ambiguous or unsupported combinations remain unclassified. Association is one-to-one, requires visible pose wrists, uses handedness plus wrist distance normalized by shoulder width, and leaves unmatched hands valid and unassociated.
 
 - [ ] **Step 1: Write failing tests** for OPEN PALM, CLOSED FIST, POINTING, PEACE SIGN, THUMBS UP, PINCHING; ambiguous finger states; three-frame state confirmation; nearest valid wrist matching; one-to-one assignment; missing pose; and distant/ambiguous wrists.
