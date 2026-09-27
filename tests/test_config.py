@@ -47,6 +47,13 @@ class RoomSenseV2ConfigTests(unittest.TestCase):
     def test_v3_timing_and_visibility_configuration_is_validated(self):
         with self.assertRaises(ValueError):
             RoomSenseConfig(pointing_min_visibility=float("nan"))
+
+    def test_evaluation_recording_path_defaults_to_separate_output_and_is_validated(self):
+        config = RoomSenseConfig()
+        self.assertEqual(config.evaluation_recording_path, "roomsense-evaluation.jsonl")
+        self.assertNotEqual(config.evaluation_recording_path, config.session_recording_path)
+        with self.assertRaisesRegex(ValueError, "evaluation_recording_path"):
+            RoomSenseConfig(evaluation_recording_path=" ")
         with self.assertRaises(ValueError):
             RoomSenseConfig(target_stability_seconds=-0.1)
         with self.assertRaises(ValueError):

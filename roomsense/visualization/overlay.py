@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping, Sequence
 
 from roomsense.calibration.camera_calibration import Calibration
@@ -13,6 +14,7 @@ from roomsense.spatial.position_history import PositionSample
 from roomsense.spatial.room_objects import RoomObject
 from roomsense.spatial.target_selection import TargetUpdate
 from roomsense.spatial.zones import Zone
+from roomsense.tracking.hand_geometry import HAND_CONNECTIONS, HandObservation
 from roomsense.tracking.position_tracker import Position
 from roomsense.tracking.pose_tracker import Landmark, SKELETON_CONNECTIONS
 from roomsense.visualization.room_map import RoomMap
@@ -32,10 +34,12 @@ class TrackingOverlay:
              target: TargetUpdate | None = None, mode: InteractionMode | str = InteractionMode.NORMAL,
              recent_events: Sequence[RoomSenseEvent] = (), demo_status: str | None = None,
              recorder_active: bool = False, objects: Sequence[RoomObject] = (),
-             debug_state: Mapping[str, object] | None = None) -> Any:
+             debug_state: Mapping[str, object] | None = None, evaluation_active: bool = False,
+             pointing_status: str = "", hands: Sequence[HandObservation] = ()) -> Any:
         import cv2
 
         height, width = frame.shape[:2]
+        hand_debug_layout = self._hand_debug_layout(width, height, len(hands)) if debug and hands else None
         if landmarks:
             self._draw_skeleton(frame, landmarks)
             points = [self._pixel_point(frame, point) for point in landmarks.values()]
@@ -43,6 +47,7 @@ class TrackingOverlay:
             x0, y0 = max(0, min(xs) - 18), max(0, min(ys) - 24)
             x1, y1 = min(width - 1, max(xs) + 18), min(height - 1, max(ys) + 18)
             self._corner_box(frame, x0, y0, x1, y1)
+        self._draw_hands(frame, landmarks, hands)
         self._draw_pointing(frame, pointing)
 
         panel_h = min(162 if calibration is None else 184, max(40, height - 12))
@@ -84,16 +89,27 @@ class TrackingOverlay:
                 cv2.putText(frame, zone_transition[:42], (29, 180), cv2.FONT_HERSHEY_SIMPLEX,
                             0.34, (80, 220, 170), 1, cv2.LINE_AA)
         if debug and calibration is not None:
-            self._draw_spatial_debug(frame, landmarks, calibration, floor_position)
+            self._draw_spatial_debug(
+                frame, landmarks, calibration, floor_position,
+                debug_y=hand_debug_layout.get("spatial_y") if hand_debug_layout else None,
+            )
         cv2.putText(frame, f"FPS {fps:04.1f}", (width - 112, height - 18), cv2.FONT_HERSHEY_SIMPLEX,
                     0.56, (125, 226, 230), 1, cv2.LINE_AA)
         movement_text = f"MOVEMENT: {movement}"
         pose_text = "POSE: " + (" / ".join(states) if states else "UNKNOWN")
         self._bottom_status(frame, movement_text, pose_text)
-        self._draw_interaction_panel(frame, pointing, target, recent_events, demo_status, recorder_active)
+        self._draw_interaction_panel(
+            frame, pointing, target, recent_events, demo_status, recorder_active,
+            evaluation_active, pointing_status,
+        )
         if debug and debug_state is not None:
-            self._draw_interaction_debug(frame, debug_state)
-        cv2.putText(frame, "C CALIBRATE   D DEBUG   R RESET   V RECORD   Q/ESC QUIT", (15, height - 82),
+            self._draw_interaction_debug(
+                frame,
+                debug_state,
+                y_positions=hand_debug_layout["interaction_y"] if hand_debug_layout else None,
+                max_chars=hand_debug_layout["interaction_chars"] if hand_debug_layout else 180,
+            )
+        cv2.putText(frame, "C CALIBRATE   D DEBUG   R RESET   V RECORD   E EVAL   Q/ESC QUIT", (15, height - 82),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.34, (165, 190, 195), 1, cv2.LINE_AA)
         if width >= 500 and height >= 350:
             self.room_map.draw(
@@ -109,7 +125,115 @@ class TrackingOverlay:
         else:
             cv2.putText(frame, "MAP HIDDEN: ENLARGE WINDOW", (max(15, width - 170), height - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.30, (115, 180, 190), 1, cv2.LINE_AA)
+        if hand_debug_layout is not None:
+            self._draw_hand_debug(frame, hands, hand_debug_layout)
         return frame
+
+    def _draw_hands(
+        self, frame: Any, body_landmarks: Mapping[str, Landmark] | None,
+        hands: Sequence[HandObservation],
+    ) -> None:
+        import cv2
+
+        height, width = frame.shape[:2]
+        for hand in hands:
+            side = hand.handedness.casefold()
+            color = (60, 225, 150) if side == "left" else (245, 175, 75)
+            points = hand.landmarks
+            for start, end in HAND_CONNECTIONS:
+                if _valid_point(points[start]) and _valid_point(points[end]):
+                    cv2.line(frame, _point_pixel(points[start], width, height),
+                             _point_pixel(points[end], width, height), color, 2, cv2.LINE_AA)
+            for index, point in enumerate(points):
+                if _valid_point(point):
+                    cv2.circle(frame, _point_pixel(point, width, height),
+                               4 if index in (0, 4, 8, 12, 16, 20) else 2, color, -1, cv2.LINE_AA)
+
+            if hand.body_side in ("left", "right") and body_landmarks is not None:
+                body_wrist = body_landmarks.get(f"{hand.body_side}_wrist")
+                if body_wrist is not None and _valid_point(points[0]) and _valid_point(body_wrist):
+                    cv2.line(frame, self._pixel_point(frame, body_wrist),
+                             _point_pixel(points[0], width, height), (235, 235, 80), 2, cv2.LINE_AA)
+
+            if _valid_point(points[0]):
+                wrist_x, wrist_y = _point_pixel(points[0], width, height)
+                label = f"{hand.handedness.upper()} {hand.state.value if hand.state else 'HAND'}"
+                cv2.putText(frame, label, (max(4, wrist_x + 8), max(16, wrist_y - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.40, color, 1, cv2.LINE_AA)
+
+    def _draw_hand_debug(
+        self, frame: Any, hands: Sequence[HandObservation], layout: Mapping[str, int | bool] | None = None,
+    ) -> None:
+        import cv2
+
+        height, width = frame.shape[:2]
+        if layout is None:
+            layout = self._hand_debug_layout(width, height, len(hands))
+        left = int(layout["left"])
+        panel_width = int(layout["width"])
+        top = int(layout["top"])
+        row_height = int(layout["row_height"])
+        compact = bool(layout["compact"])
+        side_layout = bool(layout["side"])
+        panel_height = int(layout["height"])
+        bottom = top + panel_height
+        if panel_width < 150 or bottom <= top + 24:
+            return
+        cv2.rectangle(frame, (left, top), (min(width - 1, left + panel_width), bottom), (13, 22, 30), -1)
+        cv2.rectangle(frame, (left, top), (min(width - 1, left + panel_width), bottom), (58, 176, 194), 1)
+        title = "HAND DEBUG (E EXT C CURL ?:UNCERTAIN)" if compact else "HAND TRACKING DEBUG"
+        cv2.putText(frame, title, (left + 9, top + 18), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.30 if compact else 0.38, (113, 224, 234), 1, cv2.LINE_AA)
+        for hand_index, hand in enumerate(hands):
+            side = hand.handedness.upper()
+            state = hand.state.value if hand.state else "UNCERTAIN"
+            fingers = [
+                f"{name.upper()}:{hand.finger_states[name].value.upper()}"
+                for name in ("thumb", "index", "middle", "ring", "pinky")
+            ]
+            pinch = f"{hand.pinch_distance:.2f}" if hand.pinch_distance is not None else "--"
+            palm = f"{math.degrees(hand.palm_angle):+.0f}deg" if hand.palm_angle is not None else "--"
+            normal = ",".join(f"{value:+.2f}" for value in hand.palm_normal) \
+                if hand.palm_normal is not None else "--"
+            body = hand.body_side.upper() if hand.body_side else "UNASSOCIATED"
+            if compact and side_layout:
+                y = top + 31 + hand_index * 3 * row_height
+                compact_fingers = " ".join(
+                    f"{name[0].upper()}:{'E' if hand.finger_states[name].value == 'extended' else 'C' if hand.finger_states[name].value == 'curled' else '?'}"
+                    for name in ("thumb", "index", "middle", "ring", "pinky")
+                )
+                cv2.putText(frame, f"{side} {state} {compact_fingers}", (left + 9, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.23, (225, 238, 240), 1, cv2.LINE_AA)
+                cv2.putText(frame, f"PINCH {pinch} CONF {hand.tracking_confidence:.2f} OPEN {hand.openness:.2f}",
+                            (left + 9, y + row_height), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.22, (185, 215, 220), 1, cv2.LINE_AA)
+                cv2.putText(frame, f"ANGLE {palm} NORMAL {normal} BODY {body} ({hand.association_confidence:.2f})",
+                            (left + 9, y + 2 * row_height), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.22, (185, 215, 220), 1, cv2.LINE_AA)
+            elif compact:
+                y = top + 31 + hand_index * 2 * row_height
+                compact_fingers = " ".join(
+                    f"{name[0].upper()}:{'E' if hand.finger_states[name].value == 'extended' else 'C' if hand.finger_states[name].value == 'curled' else '?'}"
+                    for name in ("thumb", "index", "middle", "ring", "pinky")
+                )
+                cv2.putText(frame, f"{side} {state}  {compact_fingers}",
+                            (left + 9, y), cv2.FONT_HERSHEY_SIMPLEX, 0.27, (225, 238, 240), 1, cv2.LINE_AA)
+                cv2.putText(frame, f"PINCH {pinch} CONF {hand.tracking_confidence:.2f} OPEN {hand.openness:.2f} "
+                                  f"ANGLE {palm} N {normal} BODY {body} ({hand.association_confidence:.2f})",
+                            (left + 9, y + row_height), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.25, (185, 215, 220), 1, cv2.LINE_AA)
+            else:
+                y = top + 37 + hand_index * 4 * row_height
+                cv2.putText(frame, f"{side} {state}  FINGERS {fingers[0]} {fingers[1]} {fingers[2]}", (left + 9, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.31, (225, 238, 240), 1, cv2.LINE_AA)
+                cv2.putText(frame, f"{fingers[3]} {fingers[4]}", (left + 9, y + row_height),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.31, (225, 238, 240), 1, cv2.LINE_AA)
+                cv2.putText(frame, f"PINCH {pinch}  CONF {hand.tracking_confidence:.2f}  OPEN {hand.openness:.2f}",
+                            (left + 9, y + 2 * row_height), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.31, (185, 215, 220), 1, cv2.LINE_AA)
+                cv2.putText(frame, f"PALM ANGLE {palm} NORMAL {normal}  BODY {body} ({hand.association_confidence:.2f})",
+                            (left + 9, y + 3 * row_height), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.31, (185, 215, 220), 1, cv2.LINE_AA)
 
     def _draw_pointing(self, frame: Any, pointing: Sequence[ArmPointing]) -> None:
         import cv2
@@ -126,27 +250,32 @@ class TrackingOverlay:
     def _draw_interaction_panel(
         self, frame: Any, pointing: Sequence[ArmPointing], target: TargetUpdate | None,
         events: Sequence[RoomSenseEvent], demo_status: str | None, recorder_active: bool,
+        evaluation_active: bool, pointing_status: str,
     ) -> None:
         import cv2
 
         height, width = frame.shape[:2]
         left, top = 15, 190
         if height < 360:
-            top = max(18, height - 66)
+            top = max(18, height - 72)
             bottom = height - 18
             panel_width = min(270, max(150, width - 30))
             cv2.rectangle(frame, (left, top), (min(width - 1, left + panel_width), bottom), (13, 22, 30), -1)
             cv2.rectangle(frame, (left, top), (min(width - 1, left + panel_width), bottom), (58, 176, 194), 1)
             chosen = (target.confirmed or target.candidate) if target else None
             label = chosen.object.name if chosen else ",".join(arm.side.upper() for arm in pointing) or "--"
-            cv2.putText(frame, f"POINTING: {label}"[:32], (left + 9, top + 20),
+            cv2.putText(frame, f"POINTING: {label}"[:32], (left + 9, top + 17),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, (245, 225, 120), 1, cv2.LINE_AA)
-            session = "REC" if recorder_active else "NOT REC"
-            cv2.putText(frame, f"SESSION: {session}  EVENTS: {len(events)}", (left + 9, top + 42),
+            status = pointing_status or ("TARGET CONFIRMED" if target and target.confirmed else "POINTING IDLE")
+            cv2.putText(frame, f"STATUS: {status}"[:35], (left + 9, top + 36),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.33, (190, 220, 225), 1, cv2.LINE_AA)
+            session = "ON" if recorder_active else "OFF"
+            evaluation = "ON" if evaluation_active else "OFF"
+            cv2.putText(frame, f"V REC: {session}  E EVAL: {evaluation}", (left + 9, top + 54),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.34, (145, 205, 190), 1, cv2.LINE_AA)
             return
         panel_width = min(430, max(150, width - 30))
-        bottom = min(height - 18, 360)
+        bottom = min(height - 18, 410)
         if bottom > top:
             cv2.rectangle(frame, (left, top), (left + panel_width, bottom), (13, 22, 30), -1)
             cv2.rectangle(frame, (left, top), (left + panel_width, bottom), (58, 176, 194), 1)
@@ -165,13 +294,18 @@ class TrackingOverlay:
                     0.48, (245, 225, 120), 1, cv2.LINE_AA)
         cv2.putText(frame, confidence, (left + 12, top + 47), cv2.FONT_HERSHEY_SIMPLEX,
                     0.42, (190, 220, 225), 1, cv2.LINE_AA)
+        status = pointing_status or ("TARGET CONFIRMED" if confirmed else "POINTING IDLE")
+        cv2.putText(frame, f"STATUS: {status}"[:52], (left + 12, top + 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (175, 220, 220), 1, cv2.LINE_AA)
         if demo_status:
-            cv2.putText(frame, f"ACTION: {demo_status}"[:48], (left + 12, top + 70),
+            cv2.putText(frame, f"ACTION: {demo_status}"[:48], (left + 12, top + 91),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.40, (90, 235, 155), 1, cv2.LINE_AA)
-        status_y = top + 91 if demo_status else top + 70
-        cv2.putText(frame, "SESSION: RECORDING" if recorder_active else "SESSION: NOT RECORDING",
+        status_y = top + 112 if demo_status else top + 91
+        capture_status = ("V SESSION: RECORDING" if recorder_active else "V SESSION: OFF") \
+            + ("   EVALUATION CAPTURE: ON" if evaluation_active else "   EVALUATION CAPTURE: OFF")
+        cv2.putText(frame, capture_status,
                     (left + 12, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
-                    (80, 220, 160) if recorder_active else (145, 165, 170), 1, cv2.LINE_AA)
+                    (80, 220, 160) if evaluation_active else (145, 165, 170), 1, cv2.LINE_AA)
         feed_y = status_y + 22
         cv2.putText(frame, "RECENT EVENTS", (left + 12, feed_y), cv2.FONT_HERSHEY_SIMPLEX,
                     0.34, (115, 205, 215), 1, cv2.LINE_AA)
@@ -184,7 +318,10 @@ class TrackingOverlay:
             cv2.putText(frame, line[:54], (left + 12, feed_y + 18 + index * 17),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.31, (200, 215, 215), 1, cv2.LINE_AA)
 
-    def _draw_interaction_debug(self, frame: Any, debug_state: Mapping[str, object]) -> None:
+    def _draw_interaction_debug(
+        self, frame: Any, debug_state: Mapping[str, object], *,
+        y_positions: tuple[int, int] | None = None, max_chars: int = 180,
+    ) -> None:
         import cv2
 
         height, _ = frame.shape[:2]
@@ -197,15 +334,58 @@ class TrackingOverlay:
         history = str(debug_state.get("gesture_history", ()))[:48]
         active_gestures = str(debug_state.get("active_gestures", ()))[:32]
         cooldowns = str(debug_state.get("cooldowns", {}))[:42]
-        cv2.putText(frame, f"ARM {raw}  SMOOTH {smooth}  CONF {confidence}  CAND {candidate}  TARGET {confirmed}",
-                    (15, max(24, height - 108)), cv2.FONT_HERSHEY_SIMPLEX,
+        y1, y2 = y_positions or (max(24, height - 108), max(36, height - 94))
+        cv2.putText(frame, f"ARM {raw}  SMOOTH {smooth}  CONF {confidence}  CAND {candidate}  TARGET {confirmed}"[:max_chars],
+                    (15, y1), cv2.FONT_HERSHEY_SIMPLEX,
                     0.28, (220, 235, 230), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"GESTURE HISTORY {history} ACTIVE {active_gestures} COOLDOWNS {cooldowns}",
-                    (15, max(36, height - 94)), cv2.FONT_HERSHEY_SIMPLEX,
+        cv2.putText(frame, f"GESTURE HISTORY {history} ACTIVE {active_gestures} COOLDOWNS {cooldowns}"[:max_chars],
+                    (15, y2), cv2.FONT_HERSHEY_SIMPLEX,
                     0.28, (220, 235, 230), 1, cv2.LINE_AA)
 
+
+    @staticmethod
+    def _hand_debug_layout(width: int, height: int, hand_count: int) -> dict[str, int | bool | tuple[int, int]]:
+        if width >= 900:
+            left = max(450, width - 535)
+            panel_width = width - left - 15
+            row_height = 18
+            panel_height = 32 + hand_count * 4 * row_height
+            top = 220
+            interaction_chars = 180
+            return {
+                "left": left, "width": panel_width, "top": top, "row_height": row_height,
+                "height": panel_height, "compact": False, "interaction_chars": interaction_chars,
+                "side": True,
+                "interaction_y": (max(24, height - 108), max(36, height - 94)),
+            }
+
+        if width >= 760:
+            left = width - 300
+            panel_width = width - left - 15
+            row_height = 14
+            panel_height = 24 + hand_count * 3 * row_height
+            return {
+                "left": left, "width": panel_width, "top": 220, "row_height": row_height,
+                "height": panel_height, "compact": True, "side": True, "interaction_chars": 180,
+                "interaction_y": (max(24, height - 108), max(36, height - 94)),
+            }
+
+        left = 15
+        panel_width = max(0, width - 30)
+        row_height = 14
+        panel_height = 24 + hand_count * 2 * row_height
+        top = max(220, height - 86 - panel_height)
+        return {
+            "left": left, "width": panel_width, "top": top, "row_height": row_height,
+            "height": panel_height, "compact": True, "side": False,
+            "interaction_chars": max(30, int((width - 30) / 7.0)),
+            "interaction_y": (max(24, top - 46), max(36, top - 32)),
+            "spatial_y": max(20, top - 14),
+        }
+
     def _draw_spatial_debug(self, frame: Any, landmarks: Mapping[str, Landmark] | None,
-                            calibration: Calibration, floor_position: FloorPosition | None) -> None:
+                            calibration: Calibration, floor_position: FloorPosition | None,
+                            *, debug_y: int | None = None) -> None:
         import cv2
 
         height, width = frame.shape[:2]
@@ -227,7 +407,7 @@ class TrackingOverlay:
             text = (f"RAW {floor_position.raw_image_x:.2f},{floor_position.raw_image_y:.2f}  "
                     f"SMOOTH {floor_position.smoothed_image_x:.2f},{floor_position.smoothed_image_y:.2f}  "
                     f"{room_debug}  CONF {floor_position.confidence:.2f}")
-            cv2.putText(frame, text, (20, height - 88), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+            cv2.putText(frame, text, (20, debug_y or height - 88), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
                         (230, 240, 240), 1, cv2.LINE_AA)
 
     def _draw_skeleton(self, frame: Any, landmarks: Mapping[str, Landmark]) -> None:
@@ -264,3 +444,14 @@ class TrackingOverlay:
                     (231, 238, 238), 1, cv2.LINE_AA)
         cv2.putText(frame, pose[:48], (29, height - 26), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                     (121, 216, 221), 1, cv2.LINE_AA)
+
+
+def _valid_point(point: Any) -> bool:
+    try:
+        return all(math.isfinite(float(value)) for value in (point.x, point.y, point.z))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _point_pixel(point: Any, width: int, height: int) -> tuple[int, int]:
+    return int(point.x * width), int(point.y * height)

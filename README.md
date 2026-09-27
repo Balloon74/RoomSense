@@ -17,7 +17,7 @@ python -m pip install -r requirements.txt
 
 This installs the `roomsense` command and the compatible camera and tracking dependencies.
 
-MediaPipe downloads the lightweight Pose Landmarker model on the first run and caches it under `~/.cache/roomsense/`. This needs an internet connection once. To use a model file you already have, pass its path as `RoomSenseConfig(pose_model_path="/path/to/model.task")` when launching from Python.
+On first run, MediaPipe downloads the Pose Landmarker and Hand Landmarker models and caches them under `~/.cache/roomsense/`. This needs an internet connection once. To use a pose model file you already have, pass its path as `RoomSenseConfig(pose_model_path="/path/to/model.task")` when launching from Python.
 
 On first launch, allow camera access for the terminal or app in **System Settings → Privacy & Security → Camera**. On macOS, RoomSense selects the built-in Mac camera by device type and matches OpenCV's device ordering, so a nearby iPhone Continuity Camera is not selected accidentally. On other systems, the default camera index is `0`. Camera size, pose confidence, smoothing, and movement thresholds are configurable in `roomsense/config.py`. Set `camera_index` in `RoomSenseConfig` only when you intentionally want to select a different camera.
 
@@ -26,7 +26,7 @@ On first launch, allow camera access for the terminal or app in **System Setting
 From the project directory with the virtual environment active, run:
 
 ```bash
-roomsense
+source .venv/bin/activate && roomsense
 ```
 
 ## Calibrate the floor
@@ -41,12 +41,23 @@ RoomSense estimates floor contact from visible ankle landmarks, averaging both f
 ## Controls
 
 - `C`: calibrate or recalibrate the floor.
-- `D`: toggle debug landmarks and raw/smoothed floor-position details.
+- `D`: toggle body and hand diagnostics, including raw/smoothed floor position, arm vectors, finger states, pinch distance, hand confidence and orientation, and wrist association.
 - `R`: reset clicked calibration points in calibration mode; reset spatial trail, direction, speed, zone state, and session distance in live mode.
 - `V`: start or stop optional JSONL session recording. Recording is off at startup and closes on quit.
+- `E`: start or stop a separate landmark-only evaluation capture. Evaluation capture is off at startup and closes on quit.
 - `Q` or `Esc`: quit in live mode. `Esc` cancels calibration; `Q` quits from calibration mode.
 
-The HUD shows tracking state, interaction mode, pointing and target confidence, demo-action status, recent events, and recording state alongside existing position and zone information. Debug mode includes arm vectors, gesture history, and cooldowns. The room map shows the calibrated floor rectangle, configured zones and object markers, the estimated person location, direction, and a fading trail of about four seconds. Speed and distance use normalized room units, not meters.
+The HUD shows tracking state, interaction mode, pointing availability and target confidence, demo-action status, recent events, and both recording states alongside existing position and zone information. Debug mode includes arm vectors, gesture history, and cooldowns. The room map shows the calibrated floor rectangle, configured zones and object markers, the estimated person location, direction, and a fading trail of about four seconds. Speed and distance use normalized room units, not meters.
+
+## Hand and finger tracking
+
+RoomSense runs MediaPipe Hand Landmarker on the same mirrored Mac camera frame as body tracking and detects up to two hands. It retains each hand's 21 landmarks and tracks the thumb, index, middle, ring, and pinky as **extended**, **curled**, or **uncertain**. Normal mode draws the hand bones and connects an associated hand wrist to the corresponding body wrist. The association uses handedness and wrist proximity; a hand remains visible without a body link when the pose wrist is missing or too far away.
+
+Supported stable hand states are **OPEN PALM**, **CLOSED FIST**, **POINTING**, **PEACE SIGN**, **THUMBS UP**, and **PINCHING**. A state must be observed for three consecutive frames before it changes, and three uncertain frames release the current state. The displayed pinch distance is relative to palm size, and openness is the fraction of fingers classified as extended. Pinching enters below a normalized distance of `0.16` and remains active until the distance exceeds `0.21`; `hand_gesture_enter_margin`, `hand_gesture_exit_margin`, and `hand_gesture_confirm_frames` in `RoomSenseConfig` tune those margins and confirmation time.
+
+Press `D` to show each hand's five finger states, pinch distance, tracking-confidence estimate, palm angle and approximate normal, and body-wrist association. Confidence combines MediaPipe's handedness score with landmark validity; it is an estimate rather than a calibrated hand-detection probability. Palm orientation and distances are approximate image-relative measurements, not physical 3D coordinates.
+
+The hand model is cached at `~/.cache/roomsense/hand_landmarker.task`. One hand-model inference runs per camera frame in addition to pose inference, so hand tracking can lower achievable frame rate depending on the Mac and camera resolution. RoomSense targets the configured `max_fps`; the preview's FPS is the runtime measurement. Reducing `camera_width` and `camera_height` in `RoomSenseConfig` reduces inference work.
 
 ## Zones
 
@@ -88,6 +99,32 @@ python -m roomsense.replay roomsense-session.jsonl --realtime
 
 Replay prints records in file order. Invalid input stops at the first malformed line and reports its line number.
 
+## Gesture and pointing evaluation
+
+Press `E` to record a separate `roomsense-evaluation.jsonl` capture. It stores timestamped normalized shoulder, elbow, and wrist coordinates with visibility values, along with the detector settings and enabled target definitions used for that run. It does not store camera frames or video. The capture is separate from `V` session recordings and is closed when stopped or when RoomSense quits.
+
+After recording, add intent labels with:
+
+```bash
+python -m roomsense.evaluation annotate roomsense-evaluation.jsonl
+```
+
+Enter labels as `gesture START END NAME`, `target START END ID`, or `none START END`. Times are seconds from the first sample. Supported gestures are `SWIPE_LEFT`, `SWIPE_RIGHT`, `BOTH_HANDS_UP`, `POINT`, and `HOLD_POINT`. The command saves a `.labels.json` sidecar file. Evaluate the capture with:
+
+```bash
+python -m roomsense.evaluation evaluate roomsense-evaluation.jsonl
+```
+
+The report includes per-gesture precision and recall, false gesture and target activations per minute, target accuracy over labeled target intervals, and gesture detection latency. Precision or recall is `null` when that gesture has no examples to measure. Try candidate settings against the same labeled capture with repeated `--set NAME=VALUE` options, for example:
+
+```bash
+python -m roomsense.evaluation evaluate roomsense-evaluation.jsonl \
+  --set pointing_min_extension=0.84 \
+  --set target_stability_seconds=0.45
+```
+
+The report includes the settings used for that replay. Captured points have already passed the configured pose visibility filter and pose smoothing, so replay can raise the visibility cutoff but cannot lower it or change pose smoothing after capture. Compare candidate reports on separate labeled sessions before adopting thresholds; a single capture can overfit one person's movement and camera position.
+
 ## Homography and limitations
 
 A homography is a perspective transform between four image points and a rectangular map. It is useful for mapping a point that lies on the assumed floor plane into normalized room coordinates. It does not recover height or true 3D position, and it does not turn normalized units into meters.
@@ -105,6 +142,9 @@ roomsense/
     calibration_store.py          versioned atomic JSON persistence
   tracking/
     pose_tracker.py               MediaPipe inference and landmark smoothing
+    hand_tracker.py               MediaPipe two-hand video inference
+    hand_geometry.py              camera-free landmark geometry and finger states
+    hand_classifier.py            stable hand states and body-wrist association
     position_tracker.py           V1 normalized X/Y and relative-depth estimate
     person_state.py               V1 movement classifier
   spatial/
@@ -127,6 +167,8 @@ roomsense/
   recording/
     session_recorder.py           opt-in versioned JSONL records
     recording_control.py          V-key recording lifecycle
+    evaluation_control.py         E-key landmark-capture lifecycle
+  evaluation.py                   camera-free landmark replay, labels, and metrics
   replay.py                       camera-free session reader and CLI
   visualization/
     calibration_view.py           frozen-frame point selection
