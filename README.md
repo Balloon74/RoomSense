@@ -41,12 +41,20 @@ RoomSense estimates floor contact from visible ankle landmarks, averaging both f
 ## Controls
 
 - `C`: calibrate or recalibrate the floor.
-- `D`: toggle debug landmarks and raw/smoothed floor-position details.
+- `D`: toggle debug landmarks, raw/smoothed floor-position details, and anonymous re-identification diagnostics.
 - `R`: reset clicked calibration points in calibration mode; reset spatial trail, direction, speed, zone state, and session distance in live mode.
 - `V`: start or stop optional JSONL session recording. Recording is off at startup and closes on quit.
 - `Q` or `Esc`: quit in live mode. `Esc` cancels calibration; `Q` quits from calibration mode.
 
-The HUD shows tracking state, interaction mode, pointing and target confidence, demo-action status, recent events, and recording state alongside existing position and zone information. Debug mode includes arm vectors, gesture history, and cooldowns. The room map shows the calibrated floor rectangle, configured zones and object markers, the estimated person location, direction, and a fading trail of about four seconds. Speed and distance use normalized room units, not meters.
+The HUD shows the anonymous person ID and tracking state alongside interaction mode, pointing and target confidence, demo-action status, recent events, and recording state. Debug mode includes arm vectors, gesture history, cooldowns, and re-identification candidate scores and factors. The room map shows the calibrated floor rectangle, configured zones and object markers, the estimated person location, direction, and a fading trail of about four seconds. Speed and distance use normalized room units, not meters.
+
+## Anonymous track continuity
+
+RoomSense assigns temporary IDs such as `PERSON_001` and `PERSON_002` to tracks during one application run. A new track is `NEW`, an observed track is `TRACKED`, a missing track is `LOST`, and a confident return is `REACQUIRED`. The short-term lost-track registry expires entries after five seconds by default. Configure `reidentification_timeout_seconds`, `reidentification_confidence_threshold`, and `reidentification_ambiguity_margin` in `RoomSenseConfig`; re-identification is enabled by default and can be disabled with `reidentification_enabled=False`.
+
+Matching combines predicted position/trajectory (45%), likely re-entry direction (25%), time since loss (15%), and coarse torso geometry (15%). A candidate must score at least `0.72` by default and lead the next candidate by at least `0.12`. If the score is too low, the candidates are too close, the candidate has expired, or no candidate is available, RoomSense assigns a new anonymous ID rather than forcing a match. Press `D` to see candidate IDs, each factor score, the final score, the threshold and ambiguity margin, and the match or rejection reason.
+
+This feature uses no face matching, clothing descriptors, frame crops, or appearance embeddings. IDs and the compact continuity data stay in memory and are discarded on application exit or timeout; they are not written into session recordings or evaluation captures. Single-camera anonymous track continuity is imperfect: occlusion, abrupt movement, camera framing, similar body geometry, and pose errors can cause missed or incorrect reconnections. The current pose model tracks one person at a time, so RoomSense does not maintain simultaneous tracks for multiple visible people. These temporary labels do not establish identity or identify a person in the real world.
 
 ## Zones
 
@@ -107,6 +115,7 @@ roomsense/
     pose_tracker.py               MediaPipe inference and landmark smoothing
     position_tracker.py           V1 normalized X/Y and relative-depth estimate
     person_state.py               V1 movement classifier
+    reidentification.py           in-memory anonymous lost-track matching
   spatial/
     floor_position.py             ankle-based floor-contact estimate
     room_transform.py             calibrated normalized room coordinates
